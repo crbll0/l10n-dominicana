@@ -4,10 +4,85 @@ from werkzeug import urls
 
 from odoo import models, fields, api, _
 from odoo.exceptions import ValidationError, UserError, AccessError
+import logging
+_logger = logging.getLogger(__name__)
 
 
 class AccountMove(models.Model):
     _inherit = "account.move"
+
+    @api.depends(
+        "country_code",
+        "l10n_latam_document_type_id.l10n_do_ncf_type",
+    )
+    def _compute_is_ecf_invoice(self):
+        for invoice in self:
+            invoice.is_ecf_invoice = (
+                invoice.country_code == "DO"
+                and invoice.l10n_latam_document_type_id
+                and invoice.l10n_latam_document_type_id.l10n_do_ncf_type
+                and invoice.l10n_latam_document_type_id.l10n_do_ncf_type[:2] == "e-"
+            )
+
+    @api.depends("company_id", "company_id.l10n_do_ecf_issuer")
+    def _compute_company_in_contingency(self):
+        for invoice in self:
+            ecf_invoices = self.search(
+                [
+                    ("is_ecf_invoice", "=", True),
+                    ("l10n_latam_manual_document_number", "=", False),
+                ],
+                limit=1,
+            )
+            invoice.l10n_do_company_in_contingency = bool(
+                ecf_invoices and not invoice.company_id.l10n_do_ecf_issuer
+            )
+
+    @api.depends("l10n_do_ecf_security_code", "l10n_do_ecf_sign_date", "invoice_date")
+    @api.depends_context("l10n_do_ecf_service_env")
+    def _compute_l10n_do_electronic_stamp(self):
+
+        for invoice in self.filtered(
+            lambda i: i.is_ecf_invoice
+            and i.l10n_do_ecf_security_code
+            and i.l10n_do_ecf_sign_date
+        ):
+
+            ecf_service_env = self.env.context.get("l10n_do_ecf_service_env", "CerteCF")
+            doc_code_prefix = invoice.l10n_latam_document_type_id.doc_code_prefix
+            has_sign_date = doc_code_prefix != "E32" or (
+                doc_code_prefix == "E32" and invoice.amount_total_signed >= 250000
+            )
+
+            qr_string = "https://ecf.dgii.gov.do/%s/ConsultaTimbre?" % ecf_service_env
+            qr_string += "RncEmisor=%s&" % invoice.company_id.vat or ""
+            qr_string += (
+                "RncComprador=%s&" % invoice.commercial_partner_id.vat
+                if invoice.l10n_latam_document_type_id.doc_code_prefix[1:] != "43"
+                else invoice.company_id.vat
+            )
+            qr_string += "ENCF=%s&" % invoice.ref or ""
+            qr_string += "FechaEmision=%s&" % (
+                invoice.invoice_date or fields.Date.today()
+            ).strftime("%d-%m-%Y")
+            qr_string += "MontoTotal=%s&" % (
+                "%f" % abs(invoice.amount_total_signed)
+            ).rstrip("0").rstrip(".")
+
+            # DGII doesn't want FechaFirma if Consumo Electronico and < 250K
+            # ¯\_(ツ)_/¯
+            if has_sign_date:
+                qr_string += (
+                    "FechaFirma=%s&"
+                    % fields.Datetime.context_timestamp(
+                        self.with_context(tz="America/Santo_Domingo"),
+                        invoice.l10n_do_ecf_sign_date,
+                    ).strftime("%d-%m-%Y %H:%M:%S")
+                )
+
+            qr_string += "CodigoSeguridad=%s" % invoice.l10n_do_ecf_security_code or ""
+
+            invoice.l10n_do_electronic_stamp = urls.url_quote_plus(qr_string)
 
     _l10n_do_sequence_field = "ref"
     _l10n_do_sequence_fixed_regex = r"^(?P<prefix1>.*?)(?P<seq>\d{0,8})$"
@@ -70,6 +145,9 @@ class AccountMove(models.Model):
         string="Modifies",
     )
 
+    l10n_do_ncf_expiration_date = fields.Date(
+        string="Valid until",
+    )
     is_ecf_invoice = fields.Boolean(
         compute="_compute_is_ecf_invoice",
         store=True,
@@ -135,13 +213,30 @@ class AccountMove(models.Model):
                     )
                 )
 
+    @api.onchange("partner_id")
+    def _onchange_partner_id(self):
+        if (
+            self.company_id.country_id == self.env.ref("base.do")
+            and self.l10n_latam_document_type_id
+            and self.move_type == "in_invoice"
+            and self.partner_id
+        ):
+            self.l10n_do_expense_type = (
+                self.partner_id.l10n_do_expense_type
+                if not self.l10n_do_expense_type
+                else self.l10n_do_expense_type
+            )
+
+        return super(AccountMove, self)._onchange_partner_id()
+
+
     @api.depends(
         "journal_id.l10n_latam_use_documents",
         "l10n_latam_manual_document_number",
         "l10n_latam_document_type_id",
         "company_id",
     )
-    def _compute_l10n_do_enable_first_sequence(self):
+    def _compute_l10n_do_enable_first_sequence(self): # BIEN
         """
         Enable first fiscal sequence manual input on internal generated documents
         if no invoice of same document type was posted before
@@ -171,82 +266,300 @@ class AccountMove(models.Model):
 
         (self - l10n_do_internal_invoices).l10n_do_enable_first_sequence = False
 
-    @api.depends(
-        "country_code",
-        "l10n_latam_document_type_id.l10n_do_ncf_type",
-    )
-    def _compute_is_ecf_invoice(self):
-        for invoice in self:
-            invoice.is_ecf_invoice = (
-                invoice.country_code == "DO"
-                and invoice.l10n_latam_document_type_id
-                and invoice.l10n_latam_document_type_id.l10n_do_ncf_type
-                and invoice.l10n_latam_document_type_id.l10n_do_ncf_type[:2] == "e-"
-            )
+#     @api.depends("ref")
+#     def _compute_l10n_latam_document_number(self): # DUDOSO
+#         l10n_do_recs = self.filtered(
+#             lambda x: x.country_code == "DO" and x.l10n_latam_use_documents
+#         )
+#         for rec in l10n_do_recs:
+#             rec.l10n_latam_document_number = rec.ref
 
-    @api.depends("company_id", "company_id.l10n_do_ecf_issuer")
-    def _compute_company_in_contingency(self):
-        for invoice in self:
-            ecf_invoices = self.search([("is_ecf_invoice", "=", True)], limit=1)
-            invoice.l10n_do_company_in_contingency = bool(
-                ecf_invoices and not invoice.company_id.l10n_do_ecf_issuer
-            )
+#         super(AccountMove, self - l10n_do_recs)._compute_l10n_latam_document_number()
 
-    @api.depends("l10n_do_ecf_security_code", "l10n_do_ecf_sign_date", "invoice_date")
-    @api.depends_context("l10n_do_ecf_service_env")
-    def _compute_l10n_do_electronic_stamp(self):
+#     @api.onchange("l10n_latam_document_type_id", "l10n_latam_document_number")
+#     def _inverse_l10n_latam_document_number(self): # SIN REVISION
+#         for rec in self.filtered("l10n_latam_document_type_id"):
+#             if not rec.l10n_latam_document_number:
+#                 rec.ref = ""
+#             else:
+#                 document_type_id = rec.l10n_latam_document_type_id
+#                 if document_type_id.l10n_do_ncf_type:
+#                     document_number = document_type_id._format_document_number(
+#                         rec.l10n_latam_document_number
+#                     )
+#                 else:
+#                     document_number = rec.l10n_latam_document_number
 
-        for invoice in self.filtered(
-            lambda i: i.is_ecf_invoice
-            and i.l10n_do_ecf_security_code
-            and i.l10n_do_ecf_sign_date
+#                 if rec.l10n_latam_document_number != document_number:
+#                     rec.l10n_latam_document_number = document_number
+#                 rec.ref = document_number
+#         super(
+#             AccountMove, self.filtered(lambda m: m.country_code != "DO")
+#         )._inverse_l10n_latam_document_number()
+
+    def _get_l10n_latam_documents_domain(self): # DUDOSO
+        self.ensure_one()
+        domain = super()._get_l10n_latam_documents_domain()
+        if (
+            self.journal_id.l10n_latam_use_documents
+            and self.journal_id.company_id.country_id == self.env.ref("base.do")
         ):
-
-            ecf_service_env = self.env.context.get("l10n_do_ecf_service_env", "CerteCF")
-            doc_code_prefix = invoice.l10n_latam_document_type_id.doc_code_prefix
-            has_sign_date = doc_code_prefix != "E32" or (
-                doc_code_prefix == "E32" and invoice.amount_total_signed >= 250000
+            ncf_types = self.journal_id._get_journal_ncf_types(
+                counterpart_partner=self.partner_id.commercial_partner_id, invoice=self
             )
+            domain += [
+                "|",
+                ("l10n_do_ncf_type", "=", False),
+                ("l10n_do_ncf_type", "in", ncf_types),
+            ]
+            codes = self.journal_id._get_journal_codes()
+            if codes:
+                domain.append(("code", "in", codes))
+        return domain
 
-            qr_string = "https://ecf.dgii.gov.do/%s/ConsultaTimbre?" % ecf_service_env
-            qr_string += "RncEmisor=%s&" % invoice.company_id.vat or ""
-            qr_string += (
-                "RncComprador=%s&" % invoice.commercial_partner_id.vat
-                if invoice.l10n_latam_document_type_id.doc_code_prefix[1:] != "43"
-                else invoice.company_id.vat
-            )
-            qr_string += "ENCF=%s&" % invoice.ref or ""
-            qr_string += "FechaEmision=%s&" % (
-                invoice.invoice_date or fields.Date.today()
-            ).strftime("%d-%m-%Y")
-            qr_string += "MontoTotal=%s&" % (
-                "%f" % abs(invoice.amount_total_signed)
-            ).rstrip("0").rstrip(".")
-
-            # DGII doesn't want FechaFirma if Consumo Electronico and < 250K
-            # ¯\_(ツ)_/¯
-            if has_sign_date:
-                qr_string += (
-                    "FechaFirma=%s&"
-                    % fields.Datetime.context_timestamp(
-                        self.with_context(tz="America/Santo_Domingo"),
-                        invoice.l10n_do_ecf_sign_date,
-                    ).strftime("%d-%m-%Y %H:%M:%S")
+    @api.constrains("move_type", "l10n_latam_document_type_id")
+    def _check_invoice_type_document_type(self): # BIEN
+        l10n_do_invoices = self.filtered(
+            lambda inv: inv.country_code == "DO"
+            and inv.l10n_latam_use_documents
+            and inv.l10n_latam_document_type_id
+        )
+        for rec in l10n_do_invoices:
+            has_vat = bool(rec.partner_id.vat and bool(rec.partner_id.vat.strip()))
+            l10n_latam_document_type = rec.l10n_latam_document_type_id
+            if not has_vat and l10n_latam_document_type.is_vat_required:
+                raise ValidationError(
+                    _(
+                        "A VAT is mandatory for this type of NCF. "
+                        "Please set the current VAT of this client"
+                    )
                 )
 
-            qr_string += "CodigoSeguridad=%s" % invoice.l10n_do_ecf_security_code or ""
+            elif rec.move_type in ("out_invoice", "out_refund"):
+                if (
+                    rec.amount_untaxed_signed >= 250000
+                    and l10n_latam_document_type.l10n_do_ncf_type[-7:] != "special"
+                    and not has_vat
+                ):
+                    raise UserError(
+                        _(
+                            "If the invoice amount is greater than RD$250,000.00 "
+                            "the customer should have a VAT to validate the invoice"
+                        )
+                    )
 
-            invoice.l10n_do_electronic_stamp = urls.url_quote_plus(qr_string)
+        super(AccountMove, self - l10n_do_invoices)._check_invoice_type_document_type()
 
-    @api.depends("ref")
-    def _compute_l10n_latam_document_number(self):
-        l10n_do_recs = self.filtered(
-            lambda x: x.country_code == "DO" and x.l10n_latam_use_documents
+    def _is_manual_document_number(self, journal):
+
+        active_domain = [
+            i
+            for i in self._context.get("active_domain", [])
+            if len(i) == 3 and i[0] == "move_type"
+        ]
+        if active_domain:
+            move_type = active_domain[0][2]
+        else:
+            move_type = self.move_type
+
+        if (
+            self.company_id.country_id == self.env.ref("base.do")
+            and self.l10n_latam_document_type_id
+        ):
+            return move_type in (
+                "in_invoice",
+                "in_refund",
+            ) and self.l10n_latam_document_type_id.l10n_do_ncf_type not in (
+                "minor",
+                "e-minor",
+                "informal",
+                "e-informal",
+            )
+
+        return super(AccountMove, self)._is_manual_document_number(journal=journal)
+
+    def _l10n_do_get_formatted_sequence(self):
+        self.ensure_one()
+#         if not self._context.get("is_l10n_do_seq", False):
+#             starting_sequence = "%s/%04d/0000" % (
+#                 self.journal_id.code,
+#                 self.date.year,
+#             )
+#             if self.journal_id.refund_sequence and self.move_type in (
+#                 "out_refund",
+#                 "in_refund",
+#             ):
+#                 starting_sequence = "R" + starting_sequence
+#             return starting_sequence
+
+        document_type_id = self.l10n_latam_document_type_id
+        return "%s%s" % (
+            document_type_id.doc_code_prefix,
+            "".zfill(
+                10 if str(document_type_id.l10n_do_ncf_type).startswith("e-") else 8
+            ),
         )
-        for rec in l10n_do_recs:
-            rec.l10n_latam_document_number = rec.ref
 
-        super(AccountMove, self - l10n_do_recs)._compute_l10n_latam_document_number()
+    def _get_starting_sequence(self):
+        if (
+            self.journal_id.l10n_latam_use_documents
+            and self.country_code == "DO"
+            and self.l10n_latam_document_type_id
+        ):
+            return self._l10n_do_get_formatted_sequence()
+
+        return super()._get_starting_sequence()
+
+    def _get_last_sequence_domain(self, relaxed=False):
+        where_string, param = super(AccountMove, self)._get_last_sequence_domain(relaxed)
+        if self._context.get("is_l10n_do_seq", False):
+            where_string = where_string.replace("journal_id = %(journal_id)s AND", "")
+            where_string += (
+                " AND l10n_latam_document_type_id = %(l10n_latam_document_type_id)s AND"
+                " company_id = %(company_id)s"
+            )
+            param["company_id"] = self.company_id.id or False
+            param["l10n_latam_document_type_id"] = (
+                self.l10n_latam_document_type_id.id or 0
+            )
+        return where_string, param
+
+    @api.depends(lambda self: [self._l10n_do_sequence_field])
+    def _compute_split_sequence(self):
+        super(AccountMove, self)._compute_split_sequence()
+        for record in self:
+            sequence = record[record._l10n_do_sequence_field] or ""
+            regex = re.sub(
+                r"\?P<\w+>",
+                "?:",
+                record._l10n_do_sequence_fixed_regex.replace(r"?P<seq>", ""),
+            )
+            matching = re.match(regex, sequence)
+            record.l10n_do_sequence_prefix = sequence[: matching.start(1)]
+            record.l10n_do_sequence_number = int(matching.group(1) or 0)
+
+#     def _get_last_sequence(self, relaxed=False):
+
+#         if not self._context.get("is_l10n_do_seq", False):
+#             return super(AccountMove, self)._get_last_sequence(relaxed=relaxed)
+
+#         self.ensure_one()
+#         if (
+#             self._l10n_do_sequence_field not in self._fields
+#             or not self._fields[self._l10n_do_sequence_field].store
+#         ):
+#             raise ValidationError(
+#                 _("%s is not a stored field", self._l10n_do_sequence_field)
+#             )
+
+#         where_string, param = self._get_last_sequence_domain(relaxed)
+#         if self.id or self.id.origin:
+#             where_string += " AND id != %(id)s "
+#             param["id"] = self.id or self.id.origin
+
+#         query = """
+#             UPDATE {table} SET write_date = write_date WHERE id = (
+#                 SELECT id FROM {table}
+#                 {where_string}
+#                 AND l10n_do_sequence_prefix = (
+#                   SELECT l10n_do_sequence_prefix
+#                   FROM {table} {where_string}
+#                   ORDER BY id DESC LIMIT 1)
+#                 ORDER BY l10n_do_sequence_number DESC
+#                 LIMIT 1
+#             )
+#             RETURNING {field};
+#         """.format(
+#             table=self._table,
+#             where_string=where_string,
+#             field=self._l10n_do_sequence_field,
+#         )
+
+#         self.flush(
+#             [
+#                 self._l10n_do_sequence_field,
+#                 "l10n_do_sequence_number",
+#                 "l10n_do_sequence_prefix",
+#             ]
+#         )
+#         self.env.cr.execute(query, param)
+#         return (self.env.cr.fetchone() or [None])[0]
+
+#     @api.model
+#     def new(self, values={}, origin=None, ref=None):
+#         if (
+#             self.l10n_latam_use_documents
+#             and self.is_ecf_invoice
+#             and values.get("type") in ("out_refund", "in_refund")
+#         ):
+#             values["l10n_latam_document_type_id"] = self.env.ref(
+#                 "l10n_do_accounting.ecf_credit_note_client"
+#             ).id
+
+#         return super(AccountMove, self).new(values, origin, ref)
+
+#     @api.depends("posted_before", "state", "journal_id", "date")
+#     def _compute_name(self):
+
+#         super(AccountMove, self.with_context(
+#             compute_manual_name=True))._compute_name()
+
+#         for move in self.filtered(
+#             lambda x: x.country_code == "DO"
+#             and x.l10n_latam_document_type_id
+#             and not x.l10n_latam_manual_document_number
+#             and not x.l10n_do_enable_first_sequence
+#         ):
+#             move.with_context(is_l10n_do_seq=True)._set_next_sequence()
+
+#     def _get_sequence_format_param(self, previous):
+
+#         if not self._context.get("is_l10n_do_seq", False):
+#             return super(AccountMove, self)._get_sequence_format_param(previous)
+
+#         regex = self._l10n_do_sequence_fixed_regex
+
+#         format_values = re.match(regex, previous).groupdict()
+#         format_values["seq_length"] = len(format_values["seq"])
+#         format_values["seq"] = int(format_values.get("seq") or 0)
+
+#         placeholders = re.findall(r"(prefix\d|seq\d?)", regex)
+#         format = "".join(
+#             "{seq:0{seq_length}d}" if s == "seq" else "{%s}" % s for s in placeholders
+#         )
+#         return format, format_values
+
+#     def _set_next_sequence(self):
+#         self.ensure_one()
+
+#         if not self._context.get("is_l10n_do_seq", False):
+#             return super(AccountMove, self)._set_next_sequence()
+
+#         last_sequence = self._get_last_sequence()
+#         new = not last_sequence
+#         if new:
+#             last_sequence = (
+#                 self._get_last_sequence(relaxed=True) or self._get_starting_sequence()
+#             )
+
+#         format, format_values = self._get_sequence_format_param(last_sequence)
+#         if new:
+#             format_values["seq"] = self.id or self._origin.id
+#         format_values["seq"] = format_values["seq"] + 1
+
+#         self[
+#             self._l10n_do_sequence_field
+#         ] = self.l10n_latam_document_type_id._format_document_number(
+#             format.format(**format_values)
+#         )
+#         self._compute_split_sequence()
+
+    # ->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    def _get_name_invoice_report(self):
+        self.ensure_one()
+        if self.l10n_latam_use_documents and self.country_code == "DO":
+            return "l10n_do_accounting.report_invoice_document_inherited"
+        return super()._get_name_invoice_report()
 
     def button_cancel(self):
 
@@ -288,95 +601,29 @@ class AccountMove(models.Model):
 
         return super(AccountMove, self).action_reverse()
 
-    @api.onchange("l10n_latam_document_type_id", "l10n_latam_document_number")
-    def _inverse_l10n_latam_document_number(self):
-        for rec in self.filtered("l10n_latam_document_type_id"):
-            if not rec.l10n_latam_document_number:
-                rec.ref = ""
-            else:
-                document_type_id = rec.l10n_latam_document_type_id
-                if document_type_id.l10n_do_ncf_type:
-                    document_number = document_type_id._format_document_number(
-                        rec.l10n_latam_document_number
-                    )
-                else:
-                    document_number = rec.l10n_latam_document_number
+    def _post(self, soft=True):
 
-                if rec.l10n_latam_document_number != document_number:
-                    rec.l10n_latam_document_number = document_number
-                rec.ref = document_number
-        super(
-            AccountMove, self.filtered(lambda m: m.country_code != "DO")
-        )._inverse_l10n_latam_document_number()
+        res = super()._post(soft)
 
-    def _get_l10n_latam_documents_domain(self):
-        self.ensure_one()
-        domain = super()._get_l10n_latam_documents_domain()
-        if (
-            self.journal_id.l10n_latam_use_documents
-            and self.journal_id.company_id.country_id == self.env.ref("base.do")
-        ):
-            ncf_types = self.journal_id._get_journal_ncf_types(
-                counterpart_partner=self.partner_id.commercial_partner_id, invoice=self
-            )
-            domain += [
-                "|",
-                ("l10n_do_ncf_type", "=", False),
-                ("l10n_do_ncf_type", "in", ncf_types),
-            ]
-            codes = self.journal_id._get_journal_codes()
-            if codes:
-                domain.append(("code", "in", codes))
-        return domain
-
-    @api.constrains("move_type", "l10n_latam_document_type_id")
-    def _check_invoice_type_document_type(self):
         l10n_do_invoices = self.filtered(
-            lambda inv: inv.country_code == "DO"
+            lambda inv: inv.company_id.country_id == self.env.ref("base.do")
             and inv.l10n_latam_use_documents
-            and inv.l10n_latam_document_type_id
         )
-        for rec in l10n_do_invoices:
-            partner_vat = rec.partner_id.vat
-            l10n_latam_document_type = rec.l10n_latam_document_type_id
-            if not partner_vat and l10n_latam_document_type.is_vat_required:
-                raise ValidationError(
-                    _(
-                        "A VAT is mandatory for this type of NCF. "
-                        "Please set the current VAT of this client"
-                    )
-                )
 
-            elif rec.move_type in ("out_invoice", "out_refund"):
-                if (
-                    rec.amount_untaxed_signed >= 250000
-                    and l10n_latam_document_type.l10n_do_ncf_type[-7:] != "special"
-                    and not rec.partner_id.vat
-                ):
-                    raise UserError(
-                        _(
-                            "If the invoice amount is greater than RD$250,000.00 "
-                            "the customer should have a VAT to validate the invoice"
-                        )
-                    )
-
-        super(AccountMove, self - l10n_do_invoices)._check_invoice_type_document_type()
-
-    @api.onchange("partner_id")
-    def _onchange_partner_id(self):
-        if (
-            self.company_id.country_id == self.env.ref("base.do")
-            and self.l10n_latam_document_type_id
-            and self.move_type == "in_invoice"
-            and self.partner_id
+        for invoice in l10n_do_invoices.filtered(
+            lambda inv: inv.l10n_latam_document_type_id
         ):
-            self.l10n_do_expense_type = (
-                self.partner_id.l10n_do_expense_type
-                if not self.l10n_do_expense_type
-                else self.l10n_do_expense_type
+            invoice.l10n_do_ncf_expiration_date = (
+                invoice.l10n_latam_document_type_id.l10n_do_ncf_expiration_date
             )
 
-        return super(AccountMove, self)._onchange_partner_id()
+        non_payer_type_invoices = l10n_do_invoices.filtered(
+            lambda inv: not inv.partner_id.l10n_do_dgii_tax_payer_type
+        )
+        if non_payer_type_invoices:
+            raise ValidationError(_("Fiscal invoices require partner fiscal type"))
+
+        return res
 
     def _reverse_move_vals(self, default_values, cancel=True):
 
@@ -405,215 +652,7 @@ class AccountMove(models.Model):
             res["invoice_line_ids"] = [
                 (0, 0, {"name": reason or _("Refund"), "price_unit": price_unit})
             ]
-        return res
-
-    def _is_manual_document_number(self, journal):
-
-        active_domain = [
-            i
-            for i in self._context.get("active_domain", [])
-            if len(i) == 3 and i[0] == "move_type"
-        ]
-        if active_domain:
-            move_type = active_domain[0][2]
-        else:
-            move_type = self.move_type
-
-        if (
-            self.company_id.country_id == self.env.ref("base.do")
-            and self.l10n_latam_document_type_id
-        ):
-            return move_type in (
-                "in_invoice",
-                "in_refund",
-            ) and self.l10n_latam_document_type_id.l10n_do_ncf_type not in (
-                "minor",
-                "e-minor",
-                "informal",
-                "e-informal",
-            )
-
-        return super(AccountMove, self)._is_manual_document_number(journal=journal)
-
-    def _post(self, soft=True):
-
-        res = super()._post(soft)
-
-        non_payer_type_invoices = self.filtered(
-            lambda inv: inv.company_id.country_id == self.env.ref("base.do")
-            and inv.l10n_latam_use_documents
-            and not inv.partner_id.l10n_do_dgii_tax_payer_type
-        )
-        if non_payer_type_invoices:
-            raise ValidationError(_("Fiscal invoices require partner fiscal type"))
 
         return res
-
-    def _l10n_do_get_formatted_sequence(self):
-        self.ensure_one()
-        if not self._context.get("is_l10n_do_seq", False):
-            starting_sequence = "%s/%04d/0000" % (
-                self.journal_id.code,
-                self.date.year,
-            )
-            if self.journal_id.refund_sequence and self.move_type in (
-                "out_refund",
-                "in_refund",
-            ):
-                starting_sequence = "R" + starting_sequence
-            return starting_sequence
-
-        document_type_id = self.l10n_latam_document_type_id
-        return "%s%s" % (
-            document_type_id.doc_code_prefix,
-            "".zfill(
-                10 if str(document_type_id.l10n_do_ncf_type).startswith("e-") else 8
-            ),
-        )
-
-    def _get_starting_sequence(self):
-        if (
-            self.journal_id.l10n_latam_use_documents
-            and self.country_code == "DO"
-            and self.l10n_latam_document_type_id
-        ):
-            return self._l10n_do_get_formatted_sequence()
-
-        return super()._get_starting_sequence()
-
-    def _get_last_sequence_domain(self, relaxed=False):
-        where_string, param = super(AccountMove, self)._get_last_sequence_domain(
-            relaxed
-        )
-        if self._context.get("is_l10n_do_seq", False):
-            where_string = where_string.replace("journal_id = %(journal_id)s AND", "")
-            where_string += (
-                " AND l10n_latam_document_type_id = %(l10n_latam_document_type_id)s AND"
-                " company_id = %(company_id)s"
-            )
-            param["company_id"] = self.company_id.id or False
-            param["l10n_latam_document_type_id"] = (
-                self.l10n_latam_document_type_id.id or 0
-            )
-        return where_string, param
-
-    @api.depends(lambda self: [self._l10n_do_sequence_field])
-    def _compute_split_sequence(self):
-        super(AccountMove, self)._compute_split_sequence()
-        for record in self:
-            sequence = record[record._l10n_do_sequence_field] or ""
-            regex = re.sub(
-                r"\?P<\w+>",
-                "?:",
-                record._l10n_do_sequence_fixed_regex.replace(r"?P<seq>", ""),
-            )
-            matching = re.match(regex, sequence)
-            record.l10n_do_sequence_prefix = sequence[: matching.start(1)]
-            record.l10n_do_sequence_number = int(matching.group(1) or 0)
-
-    def _get_last_sequence(self, relaxed=False):
-
-        if not self._context.get("is_l10n_do_seq", False):
-            return super(AccountMove, self)._get_last_sequence(relaxed=relaxed)
-
-        self.ensure_one()
-        if (
-            self._l10n_do_sequence_field not in self._fields
-            or not self._fields[self._l10n_do_sequence_field].store
-        ):
-            raise ValidationError(
-                _("%s is not a stored field", self._l10n_do_sequence_field)
-            )
-        where_string, param = self._get_last_sequence_domain(relaxed)
-        if self.id or self.id.origin:
-            where_string += " AND id != %(id)s "
-            param["id"] = self.id or self.id.origin
-
-        query = """
-            UPDATE {table} SET write_date = write_date WHERE id = (
-                SELECT id FROM {table}
-                {where_string}
-                AND l10n_do_sequence_prefix = (
-                SELECT l10n_do_sequence_prefix
-                FROM {table} {where_string}
-                ORDER BY id DESC LIMIT 1)
-                ORDER BY l10n_do_sequence_number DESC
-                LIMIT 1
-            )
-            RETURNING {field};
-        """.format(
-            table=self._table,
-            where_string=where_string,
-            field=self._l10n_do_sequence_field,
-        )
-
-        self.flush(
-            [
-                self._l10n_do_sequence_field,
-                "l10n_do_sequence_number",
-                "l10n_do_sequence_prefix",
-            ]
-        )
-        self.env.cr.execute(query, param)
-        return (self.env.cr.fetchone() or [None])[0]
-
-    @api.depends("posted_before", "state", "journal_id", "date")
-    def _compute_name(self):
-        super(AccountMove, self)._compute_name()
-        for move in self.filtered(
-            lambda x: x.country_code == "DO"
-            and x.l10n_latam_document_type_id
-            and not x.l10n_latam_manual_document_number
-            and not x.l10n_do_enable_first_sequence
-        ):
-            move.with_context(is_l10n_do_seq=True)._set_next_sequence()
-
-    def _get_sequence_format_param(self, previous):
-
-        if not self._context.get("is_l10n_do_seq", False):
-            return super(AccountMove, self)._get_sequence_format_param(previous)
-
-        regex = self._l10n_do_sequence_fixed_regex
-
-        format_values = re.match(regex, previous).groupdict()
-        format_values["seq_length"] = len(format_values["seq"])
-        format_values["seq"] = int(format_values.get("seq") or 0)
-
-        placeholders = re.findall(r"(prefix\d|seq\d?)", regex)
-        format = "".join(
-            "{seq:0{seq_length}d}" if s == "seq" else "{%s}" % s for s in placeholders
-        )
-        return format, format_values
-
-    def _set_next_sequence(self):
-        self.ensure_one()
-
-        if not self._context.get("is_l10n_do_seq", False):
-            return super(AccountMove, self)._set_next_sequence()
-
-        last_sequence = self._get_last_sequence()
-        new = not last_sequence
-        if new:
-            last_sequence = (
-                self._get_last_sequence(relaxed=True) or self._get_starting_sequence()
-            )
-
-        format, format_values = self._get_sequence_format_param(last_sequence)
-        if new:
-            format_values["seq"] = 0
-        format_values["seq"] = format_values["seq"] + 1
-
-        self[
-            self._l10n_do_sequence_field
-        ] = self.l10n_latam_document_type_id._format_document_number(
-            format.format(**format_values)
-        )
-        self._compute_split_sequence()
-
-    def _get_name_invoice_report(self):
-        self.ensure_one()
-        if self.l10n_latam_use_documents and self.country_code == "DO":
-            return "l10n_do_accounting.report_invoice_document_inherited"
-        return super()._get_name_invoice_report()
 
     # TODO: handle l10n_latam_invoice_document _compute_name() inheritance shit

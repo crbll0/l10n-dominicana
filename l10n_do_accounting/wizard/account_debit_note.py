@@ -101,10 +101,8 @@ class AccountDebitNote(models.TransientModel):
             "e-minor",
         ):
             raise UserError(
-                _(
-                    "Debit Notes are not allowed "
-                    "for Comprobante de Compra or Gastos Menores"
-                )
+                _("You cannot issue Credit/Debit Notes for %s document type")
+                % move_ids_use_document.l10n_latam_document_type_id.name
             )
 
         if len(move_ids_use_document) > 1:
@@ -142,6 +140,20 @@ class AccountDebitNote(models.TransientModel):
                 if self.l10n_do_debit_type == "fixed_amount"
                 else move.amount_untaxed * (self.l10n_do_percentage / 100)
             )
+
+            country_id = self.env.ref('base.do')
+            document_types = self.env['l10n_latam.document.type'].search([
+                ('internal_type', '=', 'debit_note'), ('country_id', '=', country_id.id)
+            ])
+            types = {i.doc_code_prefix: i.id for i in document_types}
+
+            document_number = self.l10n_latam_document_number
+            document_type = types.get(document_number[:3], False)
+            if not document_type:
+                raise UserError(_("NCF %s doesn't have the correct structure") % document_number)
+
+            # TODO: El numero de documento queda en blanco al llegar a la nota de debito
+            # TODO: Las lineas de la nota de debito no llegan
             res.update(
                 dict(
                     l10n_do_ecf_modification_code=self.l10n_do_ecf_modification_code,
@@ -149,6 +161,7 @@ class AccountDebitNote(models.TransientModel):
                     l10n_do_origin_ncf=move.l10n_latam_document_number,
                     l10n_do_expense_type=move.l10n_do_expense_type,
                     l10n_do_income_type=move.l10n_do_income_type,
+                    l10n_latam_document_type_id=document_type,
                     invoice_origin=move.name,
                     line_ids=[],
                     ref=move.name,
