@@ -1,5 +1,5 @@
 from odoo import fields, models, api, _
-from odoo.exceptions import RedirectWarning
+from odoo.exceptions import RedirectWarning, ValidationError
 
 
 class AccountJournal(models.Model):
@@ -21,11 +21,6 @@ class AccountJournal(models.Model):
         selection="_get_l10n_do_payment_form",
         string="Payment Form",
     )
-    l10n_do_sequence_ids = fields.One2many(
-        "ir.sequence",
-        "l10n_latam_journal_id",
-        string="Sequences",
-    )
 
     def _get_all_ncf_types(self, types_list, invoice):
         """
@@ -34,15 +29,11 @@ class AccountJournal(models.Model):
         :return: types_list
         """
 
-        if (
-            self.company_id.l10n_do_ecf_issuer
-            or self._context.get("use_documents", False)
-            or (
-                invoice
-                and not self.company_id.l10n_do_ecf_issuer
-                and invoice.partner_id.l10n_do_dgii_tax_payer_type
-                and invoice.partner_id.l10n_do_dgii_tax_payer_type != "non_payer"
-            )
+        if self.company_id.l10n_do_ecf_issuer or (
+            invoice
+            and not self.company_id.l10n_do_ecf_issuer
+            and invoice.partner_id.l10n_do_dgii_tax_payer_type
+            and invoice.partner_id.l10n_do_dgii_tax_payer_type != "non_payer"
         ):
             types_list.extend(
                 ["e-%s" % d for d in types_list if d not in ("unique", "import")]
@@ -109,13 +100,30 @@ class AccountJournal(models.Model):
                 else [ncf for ncf in ncf_types if ncf not in ncf_external]
             )
             return self._get_all_ncf_types(res, invoice)
-        else:
+        if counterpart_partner.l10n_do_dgii_tax_payer_type:
             counterpart_ncf_types = ncf_types_data[
                 "issued" if self.type == "sale" else "received"
             ][counterpart_partner.l10n_do_dgii_tax_payer_type]
             ncf_types = list(set(ncf_types) & set(counterpart_ncf_types))
-        if invoice.type in ["out_refund", "in_refund"]:
+        else:
+            raise ValidationError(
+                _("Partner %s is needed to issue a fiscal invoice")
+                % self._fields["l10n_do_dgii_tax_payer_type"].string
+            )
+        if invoice.move_type in ["out_refund", "in_refund"]:
             ncf_types = ["credit_note"]
+
+        if (
+            invoice
+            and invoice.debit_origin_id
+            or self.env.context.get("internal_type") == "debit_note"
+        ):
+            return (
+                ["e-debit_note"]
+                if self.company_id.l10n_do_ecf_issuer
+                and not invoice.l10n_do_company_in_contingency
+                else ["debit_note"]
+            )
 
         return self._get_all_ncf_types(ncf_types, invoice)
 
@@ -124,51 +132,3 @@ class AccountJournal(models.Model):
         if self.type != "sale":
             return []
         return ["E"] if self.company_id.l10n_do_ecf_issuer else ["B"]
-
-    @api.model
-    def create(self, values):
-        """ Create Document sequences after create the journal """
-        res = super().create(values)
-        res._l10n_do_create_document_sequences()
-        return res
-
-    def write(self, values):
-        """ Update Document sequences after update journal """
-        to_check = {"type", "l10n_latam_use_documents"}
-        res = super().write(values)
-        if to_check.intersection(set(values.keys())):
-            for rec in self:
-                rec.with_context(
-                    use_documents=values.get("l10n_latam_use_documents")
-                )._l10n_do_create_document_sequences()
-        return res
-
-    def _l10n_do_create_document_sequences(self):
-        """IF DGII Configuration changes try to review if this can be done
-        and then create / update the document sequences"""
-        self.ensure_one()
-        if self.company_id.country_id != self.env.ref("base.do"):
-            return True
-        if not self.l10n_latam_use_documents:
-            return False
-
-        sequences = self.l10n_do_sequence_ids
-        sequences.unlink()
-
-        # Create Sequences
-        ncf_types = self._get_journal_ncf_types()
-        internal_types = ["invoice", "in_invoice", "debit_note", "credit_note"]
-        domain = [
-            ("country_id.code", "=", "DO"),
-            ("internal_type", "in", internal_types),
-            ("active", "=", True),
-            "|",
-            ("l10n_do_ncf_type", "=", False),
-            ("l10n_do_ncf_type", "in", ncf_types),
-        ]
-        documents = self.env["l10n_latam.document.type"].search(domain)
-        for document in documents:
-            sequences |= self.env["ir.sequence"].sudo().create(
-                document._get_document_sequence_vals(self)
-            )
-        return sequences

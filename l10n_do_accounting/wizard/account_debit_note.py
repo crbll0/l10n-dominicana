@@ -26,7 +26,7 @@ class AccountDebitNote(models.TransientModel):
         ]
 
     l10n_latam_country_code = fields.Char(
-        default=lambda self: self.env.user.company_id.country_id.code,
+        default=lambda self: self.env.company.country_code,
         help="Technical field used to hide/show fields regarding the localization",
     )
     l10n_do_debit_type = fields.Selection(
@@ -82,19 +82,16 @@ class AccountDebitNote(models.TransientModel):
 
         move_ids_use_document = move_ids.filtered(
             lambda move: move.l10n_latam_use_documents
-            and move.company_id.l10n_do_country_code == "DO"
+            and move.company_id.country_code == "DO"
         )
         if move_ids_use_document and not self.env.user.has_group(
-            "l10n_do_debit_note.group_l10n_do_debit_note"
+            "l10n_do_accounting.group_l10n_do_debit_note"
         ):
             raise AccessError(_("You are not allowed to issue Debit Notes"))
 
         # Setting default account
         journal = move_ids[0].journal_id
-        if self._context.get("type") in ("out_invoice", "in_refund"):
-            res["l10n_do_account_id"] = journal.default_credit_account_id.id
-        else:
-            res["l10n_do_account_id"] = journal.default_debit_account_id.id
+        res["l10n_do_account_id"] = journal.default_account_id.id
 
         # Do not allow Debit Notes if Comprobante de Compra or Gastos Menores
         if move_ids[0].l10n_latam_document_type_id.l10n_do_ncf_type in (
@@ -143,6 +140,20 @@ class AccountDebitNote(models.TransientModel):
                 if self.l10n_do_debit_type == "fixed_amount"
                 else move.amount_untaxed * (self.l10n_do_percentage / 100)
             )
+
+            country_id = self.env.ref('base.do')
+            document_types = self.env['l10n_latam.document.type'].search([
+                ('internal_type', '=', 'debit_note'), ('country_id', '=', country_id.id)
+            ])
+            types = {i.doc_code_prefix: i.id for i in document_types}
+
+            document_number = self.l10n_latam_document_number
+            document_type = types.get(document_number[:3], False)
+            if not document_type:
+                raise UserError(_("NCF %s doesn't have the correct structure") % document_number)
+
+            # TODO: El numero de documento queda en blanco al llegar a la nota de debito
+            # TODO: Las lineas de la nota de debito no llegan
             res.update(
                 dict(
                     l10n_do_ecf_modification_code=self.l10n_do_ecf_modification_code,
@@ -150,8 +161,8 @@ class AccountDebitNote(models.TransientModel):
                     l10n_do_origin_ncf=move.l10n_latam_document_number,
                     l10n_do_expense_type=move.l10n_do_expense_type,
                     l10n_do_income_type=move.l10n_do_income_type,
+                    l10n_latam_document_type_id=document_type,
                     invoice_origin=move.name,
-                    is_debit_note=True,
                     line_ids=[],
                     ref=move.name,
                     invoice_line_ids=[

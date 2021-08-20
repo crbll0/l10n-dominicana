@@ -3,8 +3,8 @@ name: Unit Tests
 on:
   push:
     branches:
-      - '**'
-      - '![0-9]+.0'
+      - '[0-9]+.0-*-*'
+      - '![0-9]+.0-staging-*'
     paths:
       - '**/src/**'
       - '**/i18n/**'
@@ -20,7 +20,7 @@ jobs:
     name: Dependencies
     runs-on: ubuntu-latest
     container:
-      image: gcr.io/iterativo/dockerdoo:13.0
+      image: gcr.io/iterativo/dockerdoo:14.0
       options: --user root
     outputs:
       get_modules: ${{ steps.get_modules.outputs.modules }}
@@ -50,21 +50,7 @@ jobs:
         max_line_length: 120
 
     - name: Download python addons script
-      run: curl https://raw.githubusercontent.com/iterativo-git/dockerdoo/13.0/resources/getaddons.py -o getaddons.py
-
-    - name: ITPP-Labs pos-addons
-      uses: actions/checkout@v2
-      with:
-        repository: itpp-labs/pos-addons
-        path: pos-addons
-        ref: '13.0'
-
-    - name: INDEXA external-services
-      uses: actions/checkout@v2
-      with:
-        repository: indexa-git/external_service_addons
-        path: external-service-addons
-        ref: '13.0'
+      run: curl https://raw.githubusercontent.com/iterativo-git/dockerdoo/14.0/resources/getaddons.py -o getaddons.py
 
     - name: Odoo Enterprise
       uses: actions/checkout@v2
@@ -72,7 +58,7 @@ jobs:
         repository: odoo/enterprise
         token: ${{ secrets.ACTIONS_PAT }}
         path: enterprise
-        ref: '13.0'
+        ref: '14.0'
 
     - name: Select Odoo modules to install
       id: get_modules
@@ -88,13 +74,14 @@ jobs:
       with:
         name: modules
         path: modules.zip
+        retention-days: 1
 
   test:
     name: Test Modules
     needs: ['dependencies']
     runs-on: ubuntu-latest
     container:
-      image: gcr.io/iterativo/dockerdoo:13.0
+      image: gcr.io/iterativo/dockerdoo:14.0
       options: -t --user root
       volumes:
         - ${{ github.workspace }}:/workspace
@@ -124,12 +111,12 @@ jobs:
     - run: unzip modules.zip
 
     - name: chown home for pypy
-      uses: docker://gcr.io/iterativo/dockerdoo:13.0
+      uses: docker://gcr.io/iterativo/dockerdoo:14.0
       with:
         args: sudo chown -R 1000:1000 /github/home
 
     - name: Run odoo
-      uses: docker://gcr.io/iterativo/dockerdoo:13.0
+      uses: docker://gcr.io/iterativo/dockerdoo:14.0
       with:
         args: odoo
       env:
@@ -139,34 +126,6 @@ jobs:
         WITHOUT_DEMO: 'False'
         EXTRA_MODULES: ${{ needs.dependencies.outputs.get_modules }}
         ODOO_EXTRA_ADDONS: /github/workspace
-
-  build-github:
-    name: Build & Push to Github Packages
-    needs: ['dependencies']
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'pull_request' }}
-
-    steps:
-    - name: Download  repository results
-      uses: actions/download-artifact@v2
-      with:
-        name: modules
-
-    - run: unzip modules.zip
-
-    - name: Inject slug/short variables
-      uses: rlespinasse/github-slug-action@v2.x
-
-    - name: Push to GitHub Packages
-      uses: docker/build-push-action@v1
-      with:
-        dockerfile: ${{ env.GITHUB_REPOSITORY_SLUG_URL }}/Dockerfile
-        cache_froms: docker.pkg.github.com/${{ github.repository }}/${{ needs.dependencies.outputs.repo_name }}:${{ env.GITHUB_HEAD_REF_SLUG_URL }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-        registry: docker.pkg.github.com
-        repository: ${{ github.repository }}/${{ needs.dependencies.outputs.repo_name }}
-        tags: ${{ env.GITHUB_SHA_SHORT }}
 
   build-gcp:
     name: Build & Push to GCR
@@ -222,7 +181,7 @@ jobs:
       run: |
         curl -sfLo kustomize https://github.com/kubernetes-sigs/kustomize/releases/download/v3.1.0/kustomize_3.1.0_linux_amd64
         chmod u+x ./kustomize
-        ./kustomize build gke-dev-cluster/deployments/odoo/13.0/dev -o deployment.yaml.tmpl
+        ./kustomize build gke-dev-cluster/deployments/odoo/14.0/dev -o deployment.yaml.tmpl
 
     - name: Render Deployment YAML
       uses: nowactions/envsubst@v1

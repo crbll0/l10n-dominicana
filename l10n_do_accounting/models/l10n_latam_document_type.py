@@ -43,12 +43,24 @@ class L10nLatamDocumentType(models.Model):
         " operation type, the responsibility of both the issuer and the"
         " receptor of the document",
     )
+    l10n_do_ncf_expiration_date = fields.Date(
+        string="NCF Expiration date",
+        required=True,
+        default=fields.Date.end_of(
+            fields.Date.today().replace(year=fields.Date.today().year + 1), "year"
+        ),
+    )
     internal_type = fields.Selection(
         selection_add=[
             ("in_invoice", "Supplier Invoices"),
             ("in_credit_note", "Supplier Credit Note"),
             ("in_debit_note", "Supplier Debit Note"),
-        ]
+        ],
+        ondelete={
+            "in_invoice": "cascade",
+            "in_credit_note": "cascade",
+            "in_debit_note": "cascade",
+        },
     )
     is_vat_required = fields.Boolean(
         default=False,
