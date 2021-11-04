@@ -259,29 +259,30 @@ class AccountMove(models.Model):
         super(AccountMove, self - l10n_do_recs)._compute_l10n_latam_document_number()
 
     def button_cancel(self):
+        for move in self:
 
-        fiscal_invoice = self.filtered(
-            lambda inv: inv.country_code == "DO"
-            and self.move_type[-6:] in ("nvoice", "refund")
-            and inv.l10n_latam_use_documents
-        )
-
-        if len(fiscal_invoice) > 1:
-            raise ValidationError(
-                _("You cannot cancel multiple fiscal invoices at a time.")
+            fiscal_invoice = self.filtered(
+                lambda inv: inv.country_code == "DO"
+                and move.move_type[-6:] in ("nvoice", "refund")
+                and inv.l10n_latam_use_documents
             )
 
-        if fiscal_invoice and not self.env.user.has_group(
-            "l10n_do_accounting.group_l10n_do_fiscal_invoice_cancel"
-        ):
-            raise AccessError(_("You are not allowed to cancel Fiscal Invoices"))
+            if len(fiscal_invoice) > 1:
+                raise ValidationError(
+                    _("You cannot cancel multiple fiscal invoices at a time.")
+                )
 
-        if fiscal_invoice:
-            action = self.env.ref(
-                "l10n_do_accounting.action_account_move_cancel"
-            ).read()[0]
-            action["context"] = {"default_move_id": fiscal_invoice.id}
-            return action
+            if fiscal_invoice and not self.env.user.has_group(
+                "l10n_do_accounting.group_l10n_do_fiscal_invoice_cancel"
+            ):
+                raise AccessError(_("You are not allowed to cancel Fiscal Invoices"))
+
+            if fiscal_invoice:
+                action = self.env.ref(
+                    "l10n_do_accounting.action_account_move_cancel"
+                ).read()[0]
+                action["context"] = {"default_move_id": fiscal_invoice.id}
+                return action
 
         return super(AccountMove, self).button_cancel()
 
