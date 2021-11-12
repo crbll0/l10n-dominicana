@@ -368,7 +368,8 @@ class AccountMove(models.Model):
         domain = super()._get_l10n_latam_documents_domain()
         if (
             self.journal_id.l10n_latam_use_documents
-            and self.journal_id.company_id.country_id == self.env.ref("base.do")
+            and self.journal_id.company_id.country_id == self.env.ref("base.do") 
+            and self.journal_id.type in ('sale', 'purchase')
         ):
             ncf_types = self.journal_id._get_journal_ncf_types(
                 counterpart_partner=self.partner_id.commercial_partner_id, invoice=self
