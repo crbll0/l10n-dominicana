@@ -8,7 +8,7 @@ class AccountMove(models.Model):
 
     @api.depends('posted_before', 'state', 'journal_id', 'date')
     def _compute_name(self):
-        l10n_do_move = self.filtered(lambda x: x.country_code == "DO" and xl10n_latam_document_type_id
+        l10n_do_move = self.filtered(lambda x: x.country_code == "DO" and x.l10n_latam_document_type_id
                 and not x.l10n_latam_manual_document_number
                 and not x.l10n_do_enable_first_sequence)
 
