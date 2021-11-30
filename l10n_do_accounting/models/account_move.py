@@ -333,7 +333,7 @@ class AccountMove(models.Model):
 
         fiscal_invoice = self.filtered(
             lambda inv: inv.country_code == "DO"
-            and self.move_type[-6:] in ("nvoice", "refund")
+            and inv.move_type[-6:] in ("invoice", "refund")
         )
         if fiscal_invoice and not self.env.user.has_group(
             "l10n_do_accounting.group_l10n_do_fiscal_credit_note"
