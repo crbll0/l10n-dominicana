@@ -479,9 +479,13 @@ odoo.define('l10n_do_pos.screens', function (require) {
         },
 
         finalize_validation: function () {
+        	console.log("\n\n\ finalize_validation ====================")
             var self = this;
             var current_order = this.pos.get_order();
             var _super = this._super.bind(this);
+            console.log("\n\n\ current_order.to_invoice_backend ====================",current_order.to_invoice_backend)
+            console.log("\n\n\ self.pos.invoice_journal.l10n_latam_use_documents ====================",self.pos.invoice_journal.l10n_latam_use_documents)
+            console.log("\n\n\ !current_order.l10n_latam_document_number ====================",!current_order.l10n_latam_document_number)
             if (current_order.to_invoice_backend &&
                 self.pos.invoice_journal.l10n_latam_use_documents &&
                 !current_order.l10n_latam_document_number) {
@@ -489,6 +493,7 @@ odoo.define('l10n_do_pos.screens', function (require) {
                     self.pos.get_l10n_latam_sequence_by_document_type_id(
                         current_order.l10n_latam_document_type.id
                     );
+                console.log("\n\n\n latam_sequence =====",latam_sequence)
                 self.pos.loading_screen_on();
                 rpc.query({
                     model: 'ir.sequence',
@@ -498,6 +503,7 @@ odoo.define('l10n_do_pos.screens', function (require) {
                     self.pos.loading_screen_off();
                     current_order.l10n_latam_document_number = res.ncf;
                     current_order.l10n_do_ncf_expiration_date = res.expiration_date;
+                    console.log("hhhhhhhhhhhhhhhhhhhhssssssssssssssssshhhhhhhhhhhhhhhhhh")
                     current_order.l10n_latam_sequence_id = latam_sequence.id;
                     current_order.l10n_latam_document_type_id =
                         current_order.l10n_latam_document_type.id;

@@ -376,8 +376,7 @@ class AccountMove(models.Model):
         self.ensure_one()
         if not (
             self.journal_id.l10n_latam_use_documents
-            and self.journal_id.company_id.country_id == self.env.ref("base.do") 
-            and self.journal_id.type in ('sale', 'purchase')
+            and self.journal_id.company_id.country_id == self.env.ref("base.do")
         ):
             return super()._get_l10n_latam_documents_domain()
 
@@ -587,7 +586,10 @@ class AccountMove(models.Model):
             lambda inv: inv.l10n_latam_document_type_id
         ):
             invoice.l10n_do_ncf_expiration_date = (
-                invoice.l10n_latam_document_type_id.l10n_do_ncf_expiration_date
+                invoice.journal_id.l10n_do_document_type_ids.filtered(
+                    lambda doc: doc.l10n_latam_document_type_id
+                    == invoice.l10n_latam_document_type_id
+                ).l10n_do_ncf_expiration_date
             )
 
         non_payer_type_invoices = l10n_do_invoices.filtered(

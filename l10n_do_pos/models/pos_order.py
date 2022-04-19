@@ -70,8 +70,12 @@ class PosOrder(models.Model):
         """
         Prepare the dict of values to create the new pos order.
         """
-        res = super(PosOrder, self)._order_fields(ui_order)
+        res = super(PosOrder, self)._order_fields(ui_order)#dp
+        print("\n\n\n _order_fields =======ui_order================",ui_order)
         if ui_order.get("l10n_latam_sequence_id", False) and ui_order["to_invoice"]:
+            print("\n\n\n _order_fields =======l10n_latam_document_type_id================",ui_order[
+                        "l10n_latam_document_type_id"
+                    ])
             res.update(
                 {
                     "l10n_latam_sequence_id": ui_order["l10n_latam_sequence_id"],
@@ -98,91 +102,131 @@ class PosOrder(models.Model):
                     line_dic.get("l10n_do_original_line_id", False)
                 )
                 original_line.l10n_do_line_qty_returned += abs(line_dic.get("qty", 0))
-
+        print("\n\n\n _order_fields =======res===========sssssssss=====",res)
         return res
 
-    @api.model
-    def _payment_fields(self, order, ui_paymentline):
-        res = super(PosOrder, self)._payment_fields(order, ui_paymentline)
-        if res["payment_method_id"] == 10001:
-            res.update(
-                {
-                    "name": ui_paymentline.get("note"),
-                }
-            )
-        return res
+    # TODO: DP REMOVE STATIC
+
+    # @api.model
+    # def _payment_fields(self, order, ui_paymentline):
+    #     res = super(PosOrder, self)._payment_fields(order, ui_paymentline)
+    #     if res["payment_method_id"] == 10001:
+    #         res.update(
+    #             {
+    #                 "name": ui_paymentline.get("note"),
+    #             }
+    #         )
+    #     return res
+
 
     def add_payment(self, data):
         self.ensure_one()
-        if data["payment_method_id"] == 10001:
-            # TODO: CHECK WTF l10n_latam_document_number cant filter
-            # TODO: AGREGAR SOLO EL MONTO DEL PAGO EN LA FACTURA, ACTUALMENTE SE AGREGA COMO "PAGO" LA NOTA DE CREDITO
-            # EL PROBLEMA ES QUE SI LA NOTA DE CREDITO NO ES IGUAL AL PAGO HACE UNA DEVOLUCION POR LO TANTO EL "PAGO"
-            # CON NOTA DE CREDITO QUEDA POR ENSIMA DE LA ORDEN (ESTO ES SOLO UN PROBLEMA VISUAL QUE PUEDE CONFUDNIR AL
-            # USUARIO)
-            account_move_credit_note = (
-                self.env["pos.order"]
-                .search([("l10n_latam_document_number", "=", data["name"])])
-                .account_move
-            )
-            self.env["pos.order.payment.credit.note"].create(
-                {
-                    "amount": data["amount"],
-                    "account_move_id": account_move_credit_note.id,
-                    "pos_order_id": data["pos_order_id"],
-                    "name": data["name"],
-                }
-            )
-            self.amount_paid = sum(self.payment_ids.mapped("amount")) + sum(
-                self.l10n_do_payment_credit_note_ids.mapped("amount")
-            )
+        # if data["payment_method_id"] == 10001:
+        #     # TODO: CHECK WTF l10n_latam_document_number cant filter
+        #     # TODO: AGREGAR SOLO EL MONTO DEL PAGO EN LA FACTURA, ACTUALMENTE SE AGREGA COMO "PAGO" LA NOTA DE CREDITO
+        #     # EL PROBLEMA ES QUE SI LA NOTA DE CREDITO NO ES IGUAL AL PAGO HACE UNA DEVOLUCION POR LO TANTO EL "PAGO"
+        #     # CON NOTA DE CREDITO QUEDA POR ENSIMA DE LA ORDEN (ESTO ES SOLO UN PROBLEMA VISUAL QUE PUEDE CONFUDNIR AL
+        #     # USUARIO)
+        #     account_move_credit_note = (
+        #         self.env["pos.order"]
+        #         .search([("l10n_latam_document_number", "=", data["name"])])
+        #         .account_move
+        #     )
+        #     self.env["pos.order.payment.credit.note"].create(
+        #         {
+        #             "amount": data["amount"],
+        #             "account_move_id": account_move_credit_note.id,
+        #             "pos_order_id": data["pos_order_id"],
+        #             "name": data["name"],
+        #         }
+        #     )
+        #     self.amount_paid = sum(self.payment_ids.mapped("amount")) + sum(
+        #         self.l10n_do_payment_credit_note_ids.mapped("amount")
+        #     )
+        #
+        # elif not self.l10n_do_is_return_order:
+        super(PosOrder, self).add_payment(data)
+        self.amount_paid = sum(self.payment_ids.mapped("amount")) + sum(
+            self.l10n_do_payment_credit_note_ids.mapped("amount")
+        )
+    # def add_payment(self, data):
+    #     self.ensure_one()
+    #     if data["payment_method_id"] == 10001:
+    #         # TODO: CHECK WTF l10n_latam_document_number cant filter
+    #         # TODO: AGREGAR SOLO EL MONTO DEL PAGO EN LA FACTURA, ACTUALMENTE SE AGREGA COMO "PAGO" LA NOTA DE CREDITO
+    #         # EL PROBLEMA ES QUE SI LA NOTA DE CREDITO NO ES IGUAL AL PAGO HACE UNA DEVOLUCION POR LO TANTO EL "PAGO"
+    #         # CON NOTA DE CREDITO QUEDA POR ENSIMA DE LA ORDEN (ESTO ES SOLO UN PROBLEMA VISUAL QUE PUEDE CONFUDNIR AL
+    #         # USUARIO)
+    #         account_move_credit_note = (
+    #             self.env["pos.order"]
+    #             .search([("l10n_latam_document_number", "=", data["name"])])
+    #             .account_move
+    #         )
+    #         self.env["pos.order.payment.credit.note"].create(
+    #             {
+    #                 "amount": data["amount"],
+    #                 "account_move_id": account_move_credit_note.id,
+    #                 "pos_order_id": data["pos_order_id"],
+    #                 "name": data["name"],
+    #             }
+    #         )
+    #         self.amount_paid = sum(self.payment_ids.mapped("amount")) + sum(
+    #             self.l10n_do_payment_credit_note_ids.mapped("amount")
+    #         )
+    #
+    #     elif not self.l10n_do_is_return_order:
+    #         super(PosOrder, self).add_payment(data)
+    #         self.amount_paid = sum(self.payment_ids.mapped("amount")) + sum(
+    #             self.l10n_do_payment_credit_note_ids.mapped("amount")
+    #         )
 
-        elif not self.l10n_do_is_return_order:
-            super(PosOrder, self).add_payment(data)
-            self.amount_paid = sum(self.payment_ids.mapped("amount")) + sum(
-                self.l10n_do_payment_credit_note_ids.mapped("amount")
-            )
+    # DP END
 
     def _process_payment_lines(self, pos_order, order, pos_session, draft):
-        super(PosOrder, self)._process_payment_lines(
-            pos_order, order, pos_session, draft
-        )
+        super(PosOrder, self)._process_payment_lines(pos_order, order, pos_session, draft)
 
-        order.amount_paid = sum(order.payment_ids.mapped("amount")) + sum(
-            order.l10n_do_payment_credit_note_ids.mapped("amount")
-        )
+        order.amount_paid = sum(order.payment_ids.mapped("amount")) + sum(order.l10n_do_payment_credit_note_ids.mapped("amount"))
 
         if sum(order.payment_ids.mapped("amount")) < 0:
             order.payment_ids.unlink()
 
     def _prepare_invoice_vals(self):
         invoice_vals = super(PosOrder, self)._prepare_invoice_vals()
+        print("\n\n\n _prepare_invoice_vals ---------self-----------------",self)
+        print("\n\n\n _prepare_invoice_vals --------------------------",self.l10n_latam_document_type_id)
         documents = self.config_id.invoice_journal_id.l10n_latam_use_documents
         if documents and self.to_invoice:
-            invoice_vals["l10n_latam_sequence_id"] = self.l10n_latam_sequence_id.id
+            print("\n\n\n in================================")
+            # l10n_latam_manual_document_number
+            # invoice_vals["l10n_latam_sequence_id"] = self.l10n_latam_sequence_id.id
             invoice_vals["l10n_latam_document_number"] = self.l10n_latam_document_number
             invoice_vals[
                 "l10n_latam_document_type_id"
             ] = self.l10n_latam_document_type_id.id
-            if invoice_vals["type"] == "out_refund":
-                del invoice_vals["l10n_latam_sequence_id"]
+            print("\n\n\n invoice_vals ====",invoice_vals)
+            if invoice_vals["move_type"] == "out_refund":
+                # l10n_latam_manual_document_number
+                # del invoice_vals["l10n_latam_sequence_id"]
                 invoice_vals["l10n_latam_document_number"] = False
                 del invoice_vals["l10n_latam_document_type_id"]
-            invoice_vals["ncf_expiration_date"] = self.l10n_do_ncf_expiration_date
+            print("\n\n\n invoice_vals ==sssss==",invoice_vals)
+            # TODO: Fields not Found ncf_expiration_date
+            # invoice_vals["ncf_expiration_date"] = self.l10n_do_ncf_expiration_date
 
             invoice_vals["l10n_do_origin_ncf"] = self.l10n_latam_document_number
 
             # a POS sale invoice NCF is always an internal sequence
-            invoice_vals["is_l10n_do_internal_sequence"] = True
+            # TODO: Fields not Found is_l10n_do_internal_sequence
+            # invoice_vals["is_l10n_do_internal_sequence"] = True
 
             if self.l10n_do_is_return_order:
-                invoice_vals["type"] = "out_refund"
+                invoice_vals["move_type"] = "out_refund"
 
         return invoice_vals
 
     @api.model
     def _process_order(self, order, draft, existing_order):
-        if order["data"].get("to_invoice_backend", False):
+        if order["data"].get("to_invoice_backend", False):#DP
             order["data"]["to_invoice"] = True
             order["to_invoice"] = True
             if not order["data"]["partner_id"]:
@@ -201,7 +245,8 @@ class PosOrder(models.Model):
 
     @api.model
     def order_search_from_ui(self, day_limit=0, config_id=0, session_id=0):
-        invoice_domain = [("type", "=", "out_invoice")]
+        print("\n\n\n order_search_from_ui ============================================")
+        invoice_domain = [("move_type", "=", "out_invoice")]
         pos_order_domain = []
 
         if day_limit:
@@ -228,26 +273,20 @@ class PosOrder(models.Model):
                 "date_order": order.date_order,
                 "partner_id": [order.partner_id.id, order.partner_id.name],
                 "pos_reference": order.pos_reference,
-                "account_move": [
-                    order.account_move.id,
-                    order.account_move.l10n_latam_document_number,
-                ],
+                "account_move": [order.account_move.id, order.account_move.l10n_latam_document_number,],
                 "amount_total": order.amount_total,
                 "l10n_latam_document_number": order.account_move.l10n_latam_document_number,
                 "lines": [line.id for line in order.lines],
                 "payment_ids": [payment_id.id for payment_id in order.payment_ids],
                 "l10n_do_is_return_order": order.l10n_do_is_return_order,
+                "l10n_latam_document_type_id":order.l10n_latam_document_type_id.id if order.l10n_latam_document_type_id else False
             }
             if not order.l10n_do_is_return_order:
                 order_json["l10n_do_return_status"] = order.l10n_do_return_status
             else:
-                order.l10n_do_return_order_id.l10n_do_return_status = (
-                    order.l10n_do_return_status
-                )
+                order.l10n_do_return_order_id.l10n_do_return_status = (order.l10n_do_return_status)
                 order_json["l10n_do_return_order_id"] = order.l10n_do_return_order_id.id
-                order_json[
-                    "l10n_do_return_status"
-                ] = order.l10n_do_return_order_id.l10n_do_return_status
+                order_json["l10n_do_return_status"] = order.l10n_do_return_order_id.l10n_do_return_status
 
             for line in order.lines:
                 order_lines_json = {
@@ -268,9 +307,9 @@ class PosOrder(models.Model):
     def _is_pos_order_paid(self):
         if self.filtered(
             lambda order: order.l10n_latam_use_documents
-            and order.l10n_do_is_return_order
-        ):
+            and order.l10n_do_is_return_order):
             return True
+
         return super(PosOrder, self)._is_pos_order_paid()
 
     def action_pos_order_invoice(self):
@@ -280,13 +319,9 @@ class PosOrder(models.Model):
                 order.sudo().write({"state": "is_l10n_do_return_order"})
 
             # Reconcile Credit Notes
-            invoice_rec_line = order.account_move.line_ids.filtered(
-                lambda l: l.debit > 0
-            )
+            invoice_rec_line = order.account_move.line_ids.filtered(lambda l: l.debit > 0)
             for credit_note in order.l10n_do_payment_credit_note_ids:
-                credit_note_rec_line = credit_note.account_move_id.line_ids.filtered(
-                    lambda l: l.account_id.id == invoice_rec_line.account_id.id
-                )
+                credit_note_rec_line = credit_note.account_move_id.line_ids.filtered(lambda l: l.account_id.id == invoice_rec_line.account_id.id)
                 to_reconcile = invoice_rec_line | credit_note_rec_line
                 to_reconcile.sudo().auto_reconcile_lines()
         return res
@@ -294,25 +329,21 @@ class PosOrder(models.Model):
     @api.model
     def credit_note_info_from_ui(self, ncf):
         # TODO: CHECK WTF l10n_latam_document_number cant filter
+        # DP ADDED LIMIT 1 for .account_move
         out_refund_invoice = (
-            self.env["pos.order"]
-            .search(
-                [
+            self.env["pos.order"].search([
                     ("l10n_latam_document_number", "=", ncf),
-                    ("l10n_do_is_return_order", "=", True),
-                ]
-            )
-            .account_move
-        )
+                    ("l10n_do_is_return_order", "=", True)], limit=1).account_move)
         return {
             "id": out_refund_invoice.id,
             "residual": out_refund_invoice.amount_residual,
-            "partner_id": out_refund_invoice.partner_id.id,
+            "partner_id": out_refund_invoice.partner_id.id
         }
 
     def _get_amount_receivable(self):
         if self.state == "is_l10n_do_return_order":
             return 0
+
         return super(PosOrder, self)._get_amount_receivable()
 
 
@@ -330,15 +361,11 @@ class PosOrderLine(models.Model):
 
     @api.model
     def _order_line_fields(self, line, session_id=None):
-        fields_return = super(PosOrderLine, self)._order_line_fields(line, session_id)
-        fields_return[2].update(
-            {
-                "l10n_do_line_qty_returned": line[2].get(
-                    "l10n_do_line_qty_returned", ""
-                ),
+        fields_return = super(PosOrderLine, self)._order_line_fields(line, session_id)#dp
+        fields_return[2].update({
+                "l10n_do_line_qty_returned": line[2].get("l10n_do_line_qty_returned", ""),
                 "l10n_do_original_line_id": line[2].get("l10n_do_original_line_id", ""),
-            }
-        )
+            })
         return fields_return
 
 

@@ -55,17 +55,17 @@ class PosConfig(models.Model):
             "ncf_types_data": self.env["account.journal"]._get_l10n_do_ncf_types_data(),
         }
 
-    @api.constrains("company_id", "journal_id")
-    def _check_company_journal(self):
-        if (
-            self.journal_id
-            and self.journal_id.company_id.l10n_do_country_code == "DO"
-            and self.journal_id.l10n_latam_use_documents
-        ):
-            raise ValidationError(
-                _(
-                    "You cannot set a Fiscal Journal as Sales Journal. "
-                    "Please, select a non-fiscal journal."
-                )
-            )
-        super(PosConfig, self)._check_company_journal()
+    # @api.constrains("company_id", "journal_id")
+    # def _check_company_journal(self):
+    #     if (
+    #         self.journal_id
+    #         and self.journal_id.company_id.l10n_do_country_code == "DO"
+    #         and self.journal_id.l10n_latam_use_documents
+    #     ):
+    #         raise ValidationError(
+    #             _(
+    #                 "You cannot set a Fiscal Journal as Sales Journal. "
+    #                 "Please, select a non-fiscal journal."
+    #             )
+    #         )
+    #     super(PosConfig, self)._check_company_journal()

@@ -23,6 +23,7 @@ odoo.define('l10n_do_pos.models', function (require) {
     "use strict";
 
     var models = require('point_of_sale.models');
+    const { Gui } = require('point_of_sale.Gui');
     var core = require('web.core');
     var _t = core._t;
     var _super_order = models.Order.prototype;
@@ -31,16 +32,22 @@ odoo.define('l10n_do_pos.models', function (require) {
 
     models.load_fields('res.partner', ['l10n_do_dgii_tax_payer_type']);
     models.load_fields('pos.config', ['l10n_do_default_partner_id']);
-
+// DP ADDED
+//    models.load_fields('account.journal', [
+//        'l10n_latam_use_documents',
+//        'l10n_do_sequence_ids',
+//        'l10n_do_payment_form',
+//    ]);
     models.load_fields('account.journal', [
         'l10n_latam_use_documents',
-        'l10n_do_sequence_ids',
+        'secure_sequence_id',
         'l10n_do_payment_form',
     ]);
 
     models.load_models({
         model: 'account.journal',
-        fields: ['name', 'l10n_latam_use_documents', 'l10n_do_sequence_ids'],
+//        fields: ['name', 'l10n_latam_use_documents', 'l10n_do_sequence_ids'],
+        fields: ['name', 'l10n_latam_use_documents', 'secure_sequence_id'],
         domain: function (self) {
             return [['id', '=', self.config.invoice_journal_id[0]]];
         },
@@ -51,7 +58,7 @@ odoo.define('l10n_do_pos.models', function (require) {
             }
         },
     });
-
+//END
     //TODO: CHECK THIS
     models.load_models([{
         model: 'pos.order',
@@ -122,7 +129,7 @@ odoo.define('l10n_do_pos.models', function (require) {
             validation_date.setDate(today.getDate() - self.config.l10n_do_credit_notes_number_of_days);
             //TODO: try analize correct date
             return [
-                ['type', '=', 'out_refund'], ['state', '!=', 'paid'],
+                ['move_type', '=', 'out_refund'], ['state', '!=', 'paid'],
                 ['invoice_date', '>', validation_date.toISOString()],
             ];
         },
@@ -201,11 +208,20 @@ odoo.define('l10n_do_pos.models', function (require) {
         fields: [
             'l10n_latam_document_type_id',
         ],
+//        DP ADDED
+//        domain: function (self) {
+//            return [
+//                ['id', 'in', self.invoice_journal.l10n_do_sequence_ids],
+//            ];
+//        },
+        // ['id', 'in', [self.invoice_journal.secure_sequence_id[0]]],
         domain: function (self) {
             return [
-                ['id', 'in', self.invoice_journal.l10n_do_sequence_ids],
+                ['l10n_latam_document_type_id', '!=', false],
             ];
         },
+//        END
+
         loaded: function (self, latam_sequences) {
             self.l10n_latam_sequences = latam_sequences;
             console.log('Sequences loaded:', latam_sequences);
@@ -222,6 +238,7 @@ odoo.define('l10n_do_pos.models', function (require) {
             'internal_type',
             'doc_code_prefix',
             'country_id',
+            'l10n_do_ncf_expiration_date'
         ],
         domain: function () {
             return [
@@ -246,19 +263,37 @@ odoo.define('l10n_do_pos.models', function (require) {
         initialize: function () {
             _super_order.initialize.apply(this, arguments);
             var self = this;
-            this.l10n_latam_sequence_id = false;
-            this.l10n_latam_document_type_id = false;
+            console.log("sssssssssssssssssssssssssssssssssssssss")
+            this.l10n_latam_sequence_id = this.l10n_latam_sequence_id || false;
+            this.l10n_latam_document_type_id = this.l10n_latam_document_type_id || false;
             this.l10n_latam_document_type =
                 self.pos.get_latam_document_type_by_prefix();
-            this.to_invoice_backend = false;
+            this.to_invoice_backend = this.to_invoice_backend || false;
 
             this.l10n_do_return_status = '-';
             this.l10n_do_origin_ncf = '';
-            this.l10n_do_is_return_order = false;
-            this.l10n_do_return_order_id = false;
+            this.l10n_do_is_return_order = this.l10n_do_is_return_order || false;
+            this.l10n_do_return_order_id = this.l10n_do_return_order_id || false;
             this.set_to_invoice(true);
             this.save_to_db();
         },
+        
+        export_for_printing: function () {
+            var result = _super_order.export_for_printing.apply(this, arguments);
+            var self = this;
+            result.l10n_latam_sequence_id = self.l10n_latam_sequence_id || false;
+            result.l10n_latam_document_type_id = self.l10n_latam_document_type_id || false;
+            result.l10n_latam_document_type = self.l10n_latam_document_type;
+            result.l10n_do_ncf_expiration_date = moment(self.l10n_do_ncf_expiration_date).format('DD/MM/YYYY') || false;
+            result.to_invoice_backend = self.to_invoice_backend || false;
+            result.l10n_do_return_status = self.l10n_do_return_status || false;
+            result.l10n_do_origin_ncf = self.l10n_do_origin_ncf || false;
+            result.l10n_latam_document_number = self.l10n_latam_document_number || false;
+            result.l10n_do_is_return_order = self.l10n_do_is_return_order || false;
+            result.l10n_do_return_order_id = self.l10n_do_return_order_id || false;
+            result.formatted_validation_date = self.formatted_validation_date || false;
+            return result;
+        }, 
 
         set_latam_document_type: function (l10n_latam_document_type) {
             this.l10n_latam_document_type = l10n_latam_document_type;
@@ -272,16 +307,17 @@ odoo.define('l10n_do_pos.models', function (require) {
         },
 
         latam_document_type_changed: function () {
+// DP        ISSUE
             var current_order = this.pos.get_order();
             if (current_order){
                 var latam_document_type_name =
                     current_order.l10n_latam_document_type.name || false;
-                this.pos.gui.screen_instances.payment
-                    .$('.js_latam_document_type_name').text(
-                        latam_document_type_name);
-                this.pos.gui.screen_instances.products
-                    .$('.js_latam_document_type_name').text(
-                    latam_document_type_name);
+//                this.pos.gui.screen_instances.payment
+//                    .$('.js_latam_document_type_name').text(
+//                        latam_document_type_name);
+//                this.pos.gui.screen_instances.products
+//                    .$('.js_latam_document_type_name').text(
+//                    latam_document_type_name);
             }
         },
         // TODO: check this is meaby its important
@@ -311,6 +347,7 @@ odoo.define('l10n_do_pos.models', function (require) {
         // },
         init_from_JSON: function(json) {
             _super_order.init_from_JSON.call(this, json);
+            console.log("ddddddddddddddddddddddddddddddddddddddd")
             this.l10n_latam_document_number = json.l10n_latam_document_number;
             this.l10n_do_ncf_expiration_date = json.l10n_do_ncf_expiration_date
             this.l10n_latam_sequence_id = json.l10n_latam_sequence_id;
@@ -330,21 +367,22 @@ odoo.define('l10n_do_pos.models', function (require) {
             var loaded = _super_order.export_as_JSON.call(this);
             var current_order = self.pos.get_order();
 
-            if (current_order) {
-                loaded.l10n_latam_document_number =
-                    current_order.l10n_latam_document_number;
-                loaded.l10n_do_ncf_expiration_date = current_order.l10n_do_ncf_expiration_date;
-                loaded.l10n_latam_sequence_id =
-                    current_order.l10n_latam_sequence_id;
-                loaded.l10n_latam_document_type_id =
-                    current_order.l10n_latam_document_type_id;
-                loaded.to_invoice_backend = current_order.to_invoice_backend;
+//            if (current_order) {
+            loaded.l10n_latam_document_number =
+                self.l10n_latam_document_number || false;
+            loaded.l10n_do_ncf_expiration_date = self.l10n_do_ncf_expiration_date || false;
+            console.log("111111111111111111111111111111111")
+            loaded.l10n_latam_sequence_id =
+                self.l10n_latam_sequence_id || false;
+            loaded.l10n_latam_document_type_id =
+                self.l10n_latam_document_type_id || false;
+            loaded.to_invoice_backend = self.to_invoice_backend || false;
 
-                loaded.l10n_do_return_status = current_order.l10n_do_return_status;
-                loaded.l10n_do_origin_ncf = current_order.l10n_do_origin_ncf;
-                loaded.l10n_do_is_return_order = current_order.l10n_do_is_return_order;
-                loaded.l10n_do_return_order_id = current_order.l10n_do_return_order_id;
-            }
+            loaded.l10n_do_return_status = self.l10n_do_return_status || false;
+            loaded.l10n_do_origin_ncf = self.l10n_do_origin_ncf || false;
+            loaded.l10n_do_is_return_order = self.l10n_do_is_return_order || false;
+            loaded.l10n_do_return_order_id = self.l10n_do_return_order_id || false;
+//            }
 
             return loaded;
         },
@@ -355,11 +393,11 @@ odoo.define('l10n_do_pos.models', function (require) {
 
         set_client: function(client) {
             var self = this;
+//            ISSUE WHEN CHANGE THE CUSTOMER FROM PAYMENT SCREEN
             _super_order.set_client.apply(this, arguments);
             if (client){
                 self.set_latam_document_type(
-                    self.pos.get_latam_document_type_by_l10n_do_ncf_type(
-                        self.pos.ncf_types_data.issued[client.l10n_do_dgii_tax_payer_type][0])
+                    self.pos.get_latam_document_type_by_l10n_do_ncf_type(self.pos.ncf_types_data.issued[client.l10n_do_dgii_tax_payer_type][0])
                 );
             }else{
                 self.set_latam_document_type(
@@ -454,8 +492,12 @@ odoo.define('l10n_do_pos.models', function (require) {
             function (document_type_id) {
                 var result = false;
                 var self = this;
+                console.log("\n\n\ self.l10n_latam_sequences ====",self.l10n_latam_sequences)
                 self.l10n_latam_sequences.forEach(
                     function (latam_sequence) {
+                    	console.log("\n\n\ latam_sequence ====",latam_sequence)
+                    	console.log("\n\n\ latam_sequence.l10n_latam_document_type_id[0] ====",latam_sequence.l10n_latam_document_type_id[0])
+                    	console.log("\n\n\ document_type_id ====",document_type_id)
                         if (latam_sequence.l10n_latam_document_type_id[0] ===
                             document_type_id) {
                             result = latam_sequence;
@@ -561,10 +603,8 @@ odoo.define('l10n_do_pos.models', function (require) {
                     orderlines.forEach(function (line) {
                         self.db.line_by_id[line.id] = line;
                     });
-
-                    self.gui.screen_instances.invoiceslist.render_list(
-                        self.db.pos_all_orders);
-
+//                    self.gui.screen_instances.invoiceslist.render_list(
+//                        self.db.pos_all_orders);
                 });
         },
 

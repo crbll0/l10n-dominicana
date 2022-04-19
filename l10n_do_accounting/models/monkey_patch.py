@@ -1,10 +1,27 @@
 from collections import defaultdict
-from odoo import models, api
+from odoo import models, api,_
 from odoo.exceptions import ValidationError
 
 
 class AccountMove(models.Model):
     _inherit = "account.move"
+    
+    def _post(self, soft=True):
+        res =super(AccountMove, self)._post(soft=soft)
+        for move in self.filtered(lambda x: x.country_code == "DO"
+                                  and x.l10n_latam_document_type_id
+                                  and not x.l10n_latam_document_number
+                                  ):
+            sequence_id = self.env['ir.sequence'].sudo().search([('l10n_latam_document_type_id','=',move.l10n_latam_document_type_id.id)],limit=1)
+            if not sequence_id:
+                raise ValidationError(
+                _("Please Create Sequence for [ %s ] Document Type  !")
+                % move.l10n_latam_document_type_id.name
+            )
+            else:
+                move.sudo().l10n_latam_document_number = sequence_id.next_by_id()
+                print("\n\n\n move.sudo().l10n_latam_manual_document_number ===",move.sudo().l10n_latam_document_number)
+        return res
 
     @api.depends("posted_before", "state", "journal_id", "date")
     def _compute_name(self):
