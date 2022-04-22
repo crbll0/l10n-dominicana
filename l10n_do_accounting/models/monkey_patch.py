@@ -20,7 +20,6 @@ class AccountMove(models.Model):
             )
             else:
                 move.sudo().l10n_latam_document_number = sequence_id.next_by_id()
-                print("\n\n\n move.sudo().l10n_latam_manual_document_number ===",move.sudo().l10n_latam_document_number)
         return res
 
     @api.depends("posted_before", "state", "journal_id", "date")

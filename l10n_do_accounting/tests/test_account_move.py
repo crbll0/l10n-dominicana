@@ -1,4 +1,3 @@
-from odoo import fields
 from . import common
 from odoo.exceptions import ValidationError
 
@@ -622,7 +621,7 @@ class AccountMoveTest(common.L10nDOTestsCommon):
 
         invoice_2 = self._create_l10n_do_invoice(
             data={
-                "document_number": "B0100000002",
+                "document_number": "B0100000001",
             }
         )
         invoice_2._post()
@@ -640,16 +639,12 @@ class AccountMoveTest(common.L10nDOTestsCommon):
             }
         )
         sale_invoice_1_id._post()
-        self.assertEqual(
-            sale_invoice_1_id.name, "INV/%s/0001" % fields.Date.today().year
-        )
+        self.assertEqual(sale_invoice_1_id.name, "INV/2021/0001")
         self.assertEqual(sale_invoice_1_id.l10n_do_fiscal_number, "B0100000001")
 
         sale_invoice_2_id = self._create_l10n_do_invoice()
         sale_invoice_2_id._post()
-        self.assertEqual(
-            sale_invoice_2_id.name, "INV/%s/0002" % fields.Date.today().year
-        )
+        self.assertEqual(sale_invoice_2_id.name, "INV/2021/0002")
         self.assertEqual(sale_invoice_2_id.l10n_do_fiscal_number, "B0100000002")
 
         purchase_invoice_1_id = self._create_l10n_do_invoice(
@@ -660,9 +655,7 @@ class AccountMoveTest(common.L10nDOTestsCommon):
             invoice_type="in_invoice",
         )
         purchase_invoice_1_id._post()
-        self.assertEqual(
-            purchase_invoice_1_id.name, "BILL/%s/0001" % fields.Date.today().year
-        )
+        self.assertEqual(purchase_invoice_1_id.name, "BILL/2021/0001")
         self.assertEqual(purchase_invoice_1_id.l10n_do_fiscal_number, "B0100000001")
 
         purchase_invoice_2_id = self._create_l10n_do_invoice(
@@ -674,9 +667,7 @@ class AccountMoveTest(common.L10nDOTestsCommon):
             invoice_type="in_invoice",
         )
         purchase_invoice_2_id._post()
-        self.assertEqual(
-            purchase_invoice_2_id.name, "BILL/%s/0002" % fields.Date.today().year
-        )
+        self.assertEqual(purchase_invoice_2_id.name, "BILL/2021/0002")
         self.assertEqual(purchase_invoice_2_id.l10n_do_fiscal_number, "B1100000001")
 
     def test_009_invoice_sequence(self):
@@ -696,9 +687,13 @@ class AccountMoveTest(common.L10nDOTestsCommon):
 
     def test_010_ncf_format(self):
         with self.assertRaises(ValidationError):
-            self._create_l10n_do_invoice(data={"document_number": "E0100000001"})
+            self._create_l10n_do_invoice(
+                data={"document_number": "E0100000001"}
+            )
 
         self.do_company.l10n_do_ecf_issuer = True
 
         with self.assertRaises(ValidationError):
-            self._create_l10n_do_invoice(data={"document_number": "B310000000001"})
+            self._create_l10n_do_invoice(
+                data={"document_number": "B310000000001"}
+            )

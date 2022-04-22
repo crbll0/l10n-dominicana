@@ -108,7 +108,6 @@ class AccountMove(models.Model):
     l10n_do_fiscal_number = fields.Char(
         "Fiscal Number",
         index=True,
-        tracking=True,
         copy=False,
         help="Stored field equivalent of l10n_latam_document number",
     )
@@ -116,7 +115,6 @@ class AccountMove(models.Model):
     l10n_do_ecf_edi_file_name = fields.Char(
         "ECF XML File Name", copy=False, readonly=True
     )
-    l10n_latam_manual_document_number = fields.Boolean(store=True)
 
     def init(self):
 
@@ -246,59 +244,52 @@ class AccountMove(models.Model):
                     invoice.invoice_date or fields.Date.today()
                 ).strftime("%d-%m-%Y")
             qr_string += "MontoTotal=%s&" % (
-                "%f" % sum(invoice.line_ids.mapped("credit"))
+                "%f" % abs(invoice.amount_total_signed)
             ).rstrip("0").rstrip(".")
             if not is_rfc:
                 qr_string += "FechaFirma=%s&" % invoice.l10n_do_ecf_sign_date.strftime(
                     "%d-%m-%Y%%20%H:%M:%S"
                 )
 
-            special_chars = " !#$&'()*+,/:;=?@[]\"-.<>\\^_`"
-            security_code = "".join(
-                c.replace(c, "%" + c.encode("utf-8").hex()).upper()
-                if c in special_chars
-                else c
-                for c in invoice.l10n_do_ecf_security_code or ""
-            )
-            qr_string += "CodigoSeguridad=%s" % security_code
+            qr_string += "CodigoSeguridad=%s" % invoice.l10n_do_ecf_security_code or ""
 
             invoice.l10n_do_electronic_stamp = urls.url_quote_plus(qr_string)
 
         (self - l10n_do_ecf_invoice).l10n_do_electronic_stamp = False
 
-    @api.constrains("name", "journal_id", "state", "l10n_do_fiscal_number")
-    def _check_unique_sequence_number(self):
-        l10n_do_invoices = self.filtered(
-            lambda inv: inv.l10n_latam_use_documents
-            and inv.country_code == "DO"
-            and inv.is_sale_document()
-            and inv.state == "posted"
-        )
-        if l10n_do_invoices:
-            self.flush(
-                ["name", "journal_id", "move_type", "state", "l10n_do_fiscal_number"]
-            )
-            self._cr.execute(
-                """
-                SELECT move2.id, move2.l10n_do_fiscal_number
-                FROM account_move move
-                INNER JOIN account_move move2 ON
-                    move2.l10n_do_fiscal_number = move.l10n_do_fiscal_number
-                    AND move2.journal_id = move.journal_id
-                    AND move2.move_type = move.move_type
-                    AND move2.id != move.id
-                WHERE move.id IN %s AND move2.state = 'posted'
-            """,
-                [tuple(l10n_do_invoices.ids)],
-            )
-            res = self._cr.fetchone()
-            if res:
-                raise ValidationError(
-                    _("There is already a sale invoice with fiscal number %s")
-                    % self.l10n_do_fiscal_number
-                )
-
-        super(AccountMove, (self - l10n_do_invoices))._check_unique_sequence_number()
+    # @api.constrains("name", "journal_id", "state", "l10n_do_fiscal_number")
+    # def _check_unique_sequence_number(self):
+        # l10n_do_invoices = self.filtered(
+            # lambda inv: inv.l10n_latam_use_documents
+            # and inv.country_code == "DO"
+            # and inv.is_sale_document()
+            # and inv.state == "posted"
+        # )
+        # if l10n_do_invoices:
+            # self.flush(
+                # ["name", "journal_id", "move_type", "state", "l10n_do_fiscal_number"]
+            # )
+            # self._cr.execute(
+                # """
+                # SELECT move2.id, move2.l10n_do_fiscal_number
+                # FROM account_move move
+                # INNER JOIN account_move move2 ON
+                    # move2.l10n_do_fiscal_number = move.l10n_do_fiscal_number
+                    # AND move2.journal_id = move.journal_id
+                    # AND move2.move_type = move.move_type
+                    # AND move2.id != move.id
+                # WHERE move.id IN %s AND move2.state = 'posted'
+            # """,
+                # [tuple(l10n_do_invoices.ids)],
+            # )
+            # res = self._cr.fetchone()
+            # if res:
+                # raise ValidationError(
+                    # _("There is already a sale invoice with fiscal number %s")
+                    # % self.l10n_do_fiscal_number
+                # )
+                #
+        # super(AccountMove, (self - l10n_do_invoices))._check_unique_sequence_number()
 
     @api.depends("l10n_do_fiscal_number")
     def _compute_l10n_latam_document_number(self):
@@ -374,33 +365,23 @@ class AccountMove(models.Model):
 
     def _get_l10n_latam_documents_domain(self):
         self.ensure_one()
-        if not (
+        domain = super()._get_l10n_latam_documents_domain()
+        if (
             self.journal_id.l10n_latam_use_documents
-            and self.journal_id.company_id.country_id == self.env.ref("base.do")
+            and self.journal_id.company_id.country_id == self.env.ref("base.do") 
+            and self.journal_id.type in ('sale', 'purchase')
         ):
-            return super()._get_l10n_latam_documents_domain()
-
-        internal_types = ["debit_note"]
-        if self.move_type in ["out_refund", "in_refund"]:
-            internal_types.append("credit_note")
-        else:
-            internal_types.append("invoice")
-
-        domain = [
-            ("internal_type", "in", internal_types),
-            ("country_id", "=", self.company_id.country_id.id),
-        ]
-        ncf_types = self.journal_id._get_journal_ncf_types(
-            counterpart_partner=self.partner_id.commercial_partner_id, invoice=self
-        )
-        domain += [
-            "|",
-            ("l10n_do_ncf_type", "=", False),
-            ("l10n_do_ncf_type", "in", ncf_types),
-        ]
-        codes = self.journal_id._get_journal_codes()
-        if codes:
-            domain.append(("code", "in", codes))
+            ncf_types = self.journal_id._get_journal_ncf_types(
+                counterpart_partner=self.partner_id.commercial_partner_id, invoice=self
+            )
+            domain += [
+                "|",
+                ("l10n_do_ncf_type", "=", False),
+                ("l10n_do_ncf_type", "in", ncf_types),
+            ]
+            codes = self.journal_id._get_journal_codes()
+            if codes:
+                domain.append(("code", "in", codes))
         return domain
 
     @api.constrains("move_type", "l10n_latam_document_type_id")
@@ -413,20 +394,27 @@ class AccountMove(models.Model):
         for rec in l10n_do_invoices:
             has_vat = bool(rec.partner_id.vat and bool(rec.partner_id.vat.strip()))
             l10n_latam_document_type = rec.l10n_latam_document_type_id
-            if not has_vat and (
-                rec.amount_untaxed_signed >= 250000
-                or (
-                    l10n_latam_document_type.is_vat_required
-                    and rec.commercial_partner_id.l10n_do_dgii_tax_payer_type
-                    != "non_payer"
-                )
-            ):
+            if not has_vat and l10n_latam_document_type.is_vat_required:
                 raise ValidationError(
                     _(
                         "A VAT is mandatory for this type of NCF. "
                         "Please set the current VAT of this client"
                     )
                 )
+
+            elif rec.move_type in ("out_invoice", "out_refund"):
+                if (
+                    rec.amount_untaxed_signed >= 250000
+                    and l10n_latam_document_type.l10n_do_ncf_type[-7:] != "special"
+                    and not has_vat
+                ):
+                    raise UserError(
+                        _(
+                            "If the invoice amount is greater than RD$250,000.00 "
+                            "the customer should have a VAT to validate the invoice"
+                        )
+                    )
+
         super(AccountMove, self - l10n_do_invoices)._check_invoice_type_document_type()
 
     @api.onchange("partner_id")
@@ -488,16 +476,13 @@ class AccountMove(models.Model):
             move.l10n_latam_manual_document_number = (
                 move._is_l10n_do_manual_document_number()
             )
-
+            
         super(
             AccountMove, self - l10n_do_recs_with_journal_id
         )._compute_l10n_latam_manual_document_number()
 
     def _is_l10n_do_manual_document_number(self):
         self.ensure_one()
-
-        if self.reversed_entry_id:
-            return self.reversed_entry_id.l10n_latam_manual_document_number
 
         return self.move_type in (
             "in_invoice",
@@ -586,10 +571,7 @@ class AccountMove(models.Model):
             lambda inv: inv.l10n_latam_document_type_id
         ):
             invoice.l10n_do_ncf_expiration_date = (
-                invoice.journal_id.l10n_do_document_type_ids.filtered(
-                    lambda doc: doc.l10n_latam_document_type_id
-                    == invoice.l10n_latam_document_type_id
-                ).l10n_do_ncf_expiration_date
+                invoice.l10n_latam_document_type_id.l10n_do_ncf_expiration_date
             )
 
         non_payer_type_invoices = l10n_do_invoices.filtered(
@@ -645,18 +627,9 @@ class AccountMove(models.Model):
             where_string = where_string.replace("journal_id = %(journal_id)s AND", "")
             where_string += (
                 " AND l10n_latam_document_type_id = %(l10n_latam_document_type_id)s AND"
-                " company_id = %(company_id)s AND l10n_do_sequence_prefix != ''"
-                " AND l10n_do_sequence_prefix IS NOT NULL"
+                " move_type = %(move_type)s AND company_id = %(company_id)s"
             )
-            if (
-                not self.l10n_latam_manual_document_number
-                and self.move_type != "in_refund"
-            ):
-                where_string += " AND move_type = %(move_type)s"
-                param["move_type"] = self.move_type
-            else:
-                where_string += " AND l10n_latam_manual_document_number = 'f'"
-
+            param["move_type"] = self.move_type
             param["company_id"] = self.company_id.id or False
             param["l10n_latam_document_type_id"] = (
                 self.l10n_latam_document_type_id.id or 0
@@ -754,6 +727,7 @@ class AccountMove(models.Model):
         return format, format_values
 
     def _set_next_sequence(self):
+        print("\n\n\n _set_next_sequence ================================")
         self.ensure_one()
 
         if not self._context.get("is_l10n_do_seq", False):
@@ -765,18 +739,18 @@ class AccountMove(models.Model):
             last_sequence = (
                 self._get_last_sequence(relaxed=True) or self._get_starting_sequence()
             )
-
         format, format_values = self._get_sequence_format_param(last_sequence)
         if new:
             format_values["seq"] = 0
         format_values["seq"] = format_values["seq"] + 1
-
-        if self.state != "draft" and not self[self._l10n_do_sequence_field]:
-            self[
-                self._l10n_do_sequence_field
-            ] = self.l10n_latam_document_type_id._format_document_number(
-                format.format(**format_values)
-            )
+        print("\n\n\n last_sequence =======================last_sequence====",last_sequence)
+        # if self.state != "draft":
+        #     print("KKKKKKKKKKKKkk")
+        #     self[
+        #         self._l10n_do_sequence_field
+        #     ] = self.l10n_latam_document_type_id._format_document_number(
+        #         format.format(**format_values)
+        #     )
         self._compute_split_sequence()
 
     def _get_name_invoice_report(self):
@@ -786,15 +760,3 @@ class AccountMove(models.Model):
         return super()._get_name_invoice_report()
 
     # TODO: handle l10n_latam_invoice_document _compute_name() inheritance shit
-
-    def unlink(self):
-        if self.filtered(
-            lambda inv: inv.is_purchase_document()
-            and inv.country_code == "DO"
-            and inv.l10n_latam_use_documents
-            and inv.posted_before
-        ):
-            raise UserError(
-                _("You cannot delete fiscal invoice which have been posted before")
-            )
-        return super(AccountMove, self).unlink()

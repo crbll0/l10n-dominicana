@@ -43,7 +43,7 @@ class L10nLatamDocumentType(models.Model):
         " operation type, the responsibility of both the issuer and the"
         " receptor of the document",
     )
-    l10n_do_ncf_expiration_date = fields.Date(  # Deprecated. Do not forward port.
+    l10n_do_ncf_expiration_date = fields.Date(
         string="NCF Expiration date",
         required=True,
         default=fields.Date.end_of(fields.Date.today(), "year"),
@@ -75,16 +75,20 @@ class L10nLatamDocumentType(models.Model):
 
         if not document_number:
             return False
-
+        print("\n\n\n self.l10n_do_ncf_type ===============",self.l10n_do_ncf_type)
+        print("\n\n\n self.l10n_do_ncf_type ===dict============",dict(self._get_l10n_do_ncf_types())[self.l10n_do_ncf_type])
         # NCF/ECF validation regex
         regex = r"^(P?((?=.{13})E)type(\d{10})|(((?=.{11})B))type(\d{8}))$".replace(
             "type", dict(self._get_l10n_do_ncf_types())[self.l10n_do_ncf_type]
         )
         pattern = compile(regex)
-
+        print("\n\n\n regex =========",regex)
+        print("\n\n\n pattern =========",pattern)
+        # Error-dev
         if not bool(pattern.match(document_number)):
             raise ValidationError(
                 _("NCF %s doesn't have the correct structure") % document_number
             )
-
+            
         return document_number
+    
