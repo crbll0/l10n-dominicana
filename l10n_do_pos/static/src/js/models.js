@@ -206,7 +206,7 @@ odoo.define('l10n_do_pos.models', function (require) {
     models.load_models({
         model: 'ir.sequence',
         fields: [
-            'l10n_latam_document_type_id',
+            'l10n_latam_document_type_id', 'company_id'
         ],
 //        DP ADDED
 //        domain: function (self) {
@@ -498,8 +498,11 @@ odoo.define('l10n_do_pos.models', function (require) {
                     	console.log("\n\n\ latam_sequence ====",latam_sequence)
                     	console.log("\n\n\ latam_sequence.l10n_latam_document_type_id[0] ====",latam_sequence.l10n_latam_document_type_id[0])
                     	console.log("\n\n\ document_type_id ====",document_type_id)
-                        if (latam_sequence.l10n_latam_document_type_id[0] ===
-                            document_type_id) {
+                        console.log("COMPARACION EMPRESAS", latam_sequence.company_id[0] === self.config.company_id[0]);
+
+                        if (latam_sequence.l10n_latam_document_type_id[0] === document_type_id 
+                            && latam_sequence.company_id[0] === self.config.company_id[0]
+                           ) {
                             result = latam_sequence;
                         }
                     });
