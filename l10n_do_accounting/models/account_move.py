@@ -376,8 +376,7 @@ class AccountMove(models.Model):
         self.ensure_one()
         if not (
             self.journal_id.l10n_latam_use_documents
-            and self.journal_id.company_id.country_id == self.env.ref("base.do") 
-            and self.journal_id.type in ('sale', 'purchase')
+            and self.journal_id.company_id.country_id == self.env.ref("base.do")
         ):
             return super()._get_l10n_latam_documents_domain()
 
@@ -517,14 +516,14 @@ class AccountMove(models.Model):
         if self.move_type == "out_invoice":
             return (
                 self.company_id.account_sale_tax_id
-                or self.env.ref("l10n_do.tax_18_sale")
+                or self.env.ref("l10n_do.%s_tax_18_sale" % self.company_id.id)
                 if (debit_date - self.invoice_date).days <= 30
                 and self.partner_id.l10n_do_dgii_tax_payer_type != "special"
-                else self.env.ref("l10n_do.tax_0_sale") or False
+                else self.env.ref("l10n_do.%s_tax_0_sale" % self.company_id.id) or False
             )
         else:
             return self.company_id.account_purchase_tax_id or self.env.ref(
-                "l10n_do.tax_0_purch"
+                "l10n_do.%s_tax_0_purch" % self.company_id.id
             )
 
     def _move_autocomplete_invoice_lines_create(self, vals_list):
@@ -587,7 +586,10 @@ class AccountMove(models.Model):
             lambda inv: inv.l10n_latam_document_type_id
         ):
             invoice.l10n_do_ncf_expiration_date = (
-                invoice.l10n_latam_document_type_id.l10n_do_ncf_expiration_date
+                invoice.journal_id.l10n_do_document_type_ids.filtered(
+                    lambda doc: doc.l10n_latam_document_type_id
+                    == invoice.l10n_latam_document_type_id
+                ).l10n_do_ncf_expiration_date
             )
 
         non_payer_type_invoices = l10n_do_invoices.filtered(
