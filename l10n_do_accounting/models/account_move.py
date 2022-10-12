@@ -614,7 +614,7 @@ class AccountMove(models.Model):
 
         return super()._get_starting_sequence()
 
-    def _get_last_sequence_domain(self, relaxed=False):
+    def _get_last_sequence_domain(self, relaxed=False, with_prefix=None, lock=True):
         where_string, param = super(AccountMove, self)._get_last_sequence_domain(
             relaxed
         )
@@ -653,7 +653,7 @@ class AccountMove(models.Model):
     def _get_last_sequence(self, relaxed=False, lock=True):
 
         if not self._context.get("is_l10n_do_seq", False):
-            return super(AccountMove, self)._get_last_sequence(relaxed=relaxed, lock=lock)
+            return super(AccountMove, self)._get_last_sequence(relaxed=relaxed,  lock=lock)
 
         self.ensure_one()
         if (

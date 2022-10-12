@@ -12,7 +12,7 @@ class AccountMove(models.Model):
                                   and x.l10n_latam_document_type_id
                                   and not x.l10n_latam_document_number
                                   ):
-            sequence_id = self.env['ir.sequence'].sudo().search([('l10n_latam_document_type_id','=',move.l10n_latam_document_type_id.id)],limit=1)
+            sequence_id = self.env['ir.sequence'].sudo().search([('l10n_latam_document_type_id','=',move.l10n_latam_document_type_id.id), ('company_id', '=', move.company_id.id)],limit=1)
             if not sequence_id:
                 raise ValidationError(
                 _("Please Create Sequence for [ %s ] Document Type  !")
