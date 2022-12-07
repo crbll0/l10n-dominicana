@@ -79,7 +79,7 @@ class AccountMove(models.Model):
     )
     is_ecf_invoice = fields.Boolean(
         compute="_compute_is_ecf_invoice",
-        store=True,
+        #store=True,
     )
     l10n_do_ecf_modification_code = fields.Selection(
         selection="_get_l10n_do_ecf_modification_code",
@@ -93,7 +93,7 @@ class AccountMove(models.Model):
     l10n_do_electronic_stamp = fields.Char(
         string="Electronic Stamp",
         compute="_compute_l10n_do_electronic_stamp",
-        store=True,
+        #store=True,
     )
     l10n_do_company_in_contingency = fields.Boolean(
         string="Company in contingency",
@@ -102,7 +102,7 @@ class AccountMove(models.Model):
     is_l10n_do_internal_sequence = fields.Boolean(
         string="Is internal sequence",
         compute="_compute_l10n_latam_document_type",
-        store=True,
+        #store=True,
     )
     l10n_do_ecf_edi_file = fields.Binary("ECF XML File", copy=False, readonly=True)
     l10n_do_ecf_edi_file_name = fields.Char(
