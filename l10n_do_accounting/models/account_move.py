@@ -3,6 +3,7 @@ from psycopg2 import sql
 from werkzeug import urls
 
 from odoo import models, fields, api, _
+from odoo.osv import expression
 from odoo.exceptions import ValidationError, UserError, AccessError
 
 
@@ -150,6 +151,22 @@ class AccountMove(models.Model):
                     )
                 )
 
+    @api.model
+    def _name_search(
+        self, name="", args=None, operator="ilike", limit=100, name_get_uid=None
+    ):
+        args = args or []
+        domain = []
+        if name:
+            domain = [
+                "|",
+                ("name", operator, name),
+                ("l10n_do_fiscal_number", operator, name),
+            ]
+        return self._search(
+            expression.AND([domain, args]), limit=limit, access_rights_uid=name_get_uid
+        )
+
     @api.depends(
         "journal_id.l10n_latam_use_documents",
         "l10n_latam_manual_document_number",
@@ -227,14 +244,36 @@ class AccountMove(models.Model):
                 for line in itbis_taxed_product_lines
                 if any(True for tax in line.tax_ids if tax.amount == 0)
             ),
+            "company_invoice_total": abs(self.amount_untaxed_signed)
+            + sum(
+                (
+                    line.debit or line.credit
+                    if self.currency_id == self.company_id.currency_id
+                    else abs(line.amount_currency)
+                )
+                for line in self.line_ids.filtered(
+                    lambda l: l.tax_line_id and l.tax_line_id.amount > 0
+                )
+            ),
+            "invoice_total": abs(self.amount_untaxed)
+            + sum(
+                (
+                    line.debit or line.credit
+                    if self.currency_id == self.company_id.currency_id
+                    else abs(line.amount_currency)
+                )
+                for line in self.line_ids.filtered(
+                    lambda l: l.tax_line_id and l.tax_line_id.amount > 0
+                )
+            ),
         }
 
     @api.depends(
         "company_id",
-        "l10n_latam_document_type_id.l10n_do_ncf_type",
+        "l10n_latam_document_type_id",
     )
     def _compute_is_ecf_invoice(self):
-        for invoice in self:
+        for invoice in self.filtered(lambda inv: inv.state == "draft"):
             invoice.is_ecf_invoice = (
                 invoice.company_id.country_id
                 and invoice.company_id.country_id.code == "DO"
@@ -245,27 +284,39 @@ class AccountMove(models.Model):
 
     @api.depends("company_id", "company_id.l10n_do_ecf_issuer")
     def _compute_company_in_contingency(self):
-        for invoice in self:
-            ecf_invoices = self.search(
-                [("is_ecf_invoice", "=", True)], limit=1
-            ).filtered(lambda i: not i.l10n_latam_manual_document_number)
+        ecf_invoices = self.search(
+            [
+                ("is_ecf_invoice", "=", True),
+            ],
+            limit=1,
+        ).filtered(lambda i: not i.l10n_latam_manual_document_number)
+
+        # first set all invoices l10n_do_company_in_contingency = False
+        self.write({"l10n_do_company_in_contingency": False})
+
+        # then get draft invoices and do the thing
+        for invoice in self.filtered(lambda inv: inv.state == "draft"):
             invoice.l10n_do_company_in_contingency = bool(
                 ecf_invoices and not invoice.company_id.l10n_do_ecf_issuer
             )
 
     @api.depends("l10n_do_ecf_security_code", "l10n_do_ecf_sign_date", "invoice_date")
-    @api.depends_context("l10n_do_ecf_service_env")
     def _compute_l10n_do_electronic_stamp(self):
 
         l10n_do_ecf_invoice = self.filtered(
             lambda i: i.is_ecf_invoice
             and not i.l10n_latam_manual_document_number
             and i.l10n_do_ecf_security_code
+            and i.state == "posted"
         )
 
         for invoice in l10n_do_ecf_invoice:
 
-            ecf_service_env = self.env.context.get("l10n_do_ecf_service_env", "CerteCF")
+            if hasattr(invoice.company_id, "l10n_do_ecf_service_env"):
+                ecf_service_env = invoice.company_id.l10n_do_ecf_service_env
+            else:
+                ecf_service_env = "TesteCF"
+
             doc_code_prefix = invoice.l10n_latam_document_type_id.doc_code_prefix
             is_rfc = (  # Es un Resumen Factura Consumo
                 doc_code_prefix == "E32" and invoice.amount_total_signed < 250000
@@ -289,18 +340,16 @@ class AccountMove(models.Model):
                     invoice.invoice_date or fields.Date.today()
                 ).strftime("%d-%m-%Y")
 
-            l10n_do_amounts = invoice._get_l10n_do_amounts(company_currency=True)
-            l10n_do_total = (
-                l10n_do_amounts["itbis_taxable_amount"]
-                + l10n_do_amounts["itbis_amount"]
-            )
+            l10n_do_total = invoice._get_l10n_do_amounts(company_currency=True)[
+                "company_invoice_total"
+            ]
 
             qr_string += "MontoTotal=%s&" % ("%f" % l10n_do_total).rstrip("0").rstrip(
                 "."
             )
             if not is_rfc:
                 qr_string += "FechaFirma=%s&" % invoice.l10n_do_ecf_sign_date.strftime(
-                    "%d-%m-%Y%%20%H:%M:%S"
+                    "%d-%m-%Y% %H:%M:%S"
                 )
 
             special_chars = " !#$&'()*+,/:;=?@[]\"-.<>\\^_`"
@@ -459,6 +508,7 @@ class AccountMove(models.Model):
             lambda inv: inv.country_code == "DO"
             and inv.l10n_latam_use_documents
             and inv.l10n_latam_document_type_id
+            and inv.state == "posted"
         )
         for rec in l10n_do_invoices:
             has_vat = bool(rec.partner_id.vat and bool(rec.partner_id.vat.strip()))
@@ -810,7 +860,11 @@ class AccountMove(models.Model):
             format_values["seq"] = 0
         format_values["seq"] = format_values["seq"] + 1
 
-        if self.state != "draft" and not self[self._l10n_do_sequence_field]:
+        if (
+            self.env.context.get("prefetch_seq")
+            or self.state != "draft"
+            and not self[self._l10n_do_sequence_field]
+        ):
             self[
                 self._l10n_do_sequence_field
             ] = self.l10n_latam_document_type_id._format_document_number(
